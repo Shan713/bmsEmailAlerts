@@ -1,45 +1,43 @@
-import smtplib, ssl, os, time
-from email.message import EmailMessage
+import os
 import requests
-from bs4 import BeautifulSoup
+import smtplib
+from email.mime.text import MIMEText
 
-BMS_URL = os.getenv("BMS_URL")
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
-CHECK_INTERVAL = 300  # 5 minutes
+def send_email(subject, body):
+    sender = os.environ["EMAIL_SENDER"]
+    password = os.environ["EMAIL_PASSWORD"]
+    receiver = os.environ["EMAIL_RECEIVER"]
 
-def is_booking_live(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        return "Book Tickets" in response.text or "book tickets" in response.text
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        return False
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = receiver
 
-def send_email():
-    msg = EmailMessage()
-    msg["Subject"] = "🎬 BookMyShow Alert: Tickets LIVE!"
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-    msg.set_content(f"Hey! Booking is LIVE: {BMS_URL}")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(sender, password)
+        server.sendmail(sender, receiver, msg.as_string())
+    print("[INFO] Email sent.")
+
+def monitor():
+    url = os.environ["BMS_URL"]
+    movie_name = os.environ.get("MOVIE_NAME", "").lower()
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            smtp.send_message(msg)
-        print("[INFO] Email sent!")
+        response = requests.get(url)
+        if response.status_code == 200:
+            content = response.text.lower()
+            if movie_name in content:
+                send_email(
+                    "🎬 Movie Available on BookMyShow!",
+                    f"The movie '{movie_name}' is listed at {url}.\nCheck and book your tickets!"
+                )
+            else:
+                print(f"[INFO] Movie '{movie_name}' not found on the page yet.")
+        else:
+            print(f"[WARN] Page returned status code {response.status_code}.")
     except Exception as e:
-        print(f"[ERROR] Email failed: {e}")
-
-def main():
-    print("[INFO] Starting monitor...")
-    if is_booking_live(BMS_URL):
-        print("[ALERT] Booking is LIVE!")
-        send_email()
-    else:
-        print("[INFO] Still waiting...")
+        print(f"[ERROR] Exception occurred: {e}")
 
 if __name__ == "__main__":
-    main()
+    print("[INFO] Starting monitor...")
+    monitor()
