@@ -20,23 +20,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Remove existing Chrome
+      - name: Install Chrome
         run: |
-          sudo apt-get remove -y google-chrome-stable || true
+          sudo apt-get update
+          sudo apt-get install -y wget unzip xvfb libxi6
+          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt install -y ./google-chrome-stable_current_amd64.deb
 
-      - name: Install Chrome 114
-        run: |
-          wget https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_114.0.5735.90-1_amd64.deb
-          sudo dpkg -i google-chrome-stable_114.0.5735.90-1_amd64.deb || sudo apt-get install -f -y
-          google-chrome --version
 
-      - name: Install ChromeDriver 114
+      - name: Install matching ChromeDriver
         run: |
-          CHROME_VERSION=114.0.5735.90
+          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
+          echo "Detected Chrome version: $CHROME_VERSION"
+          # Remove old chromedriver if exists
           sudo rm -f /usr/local/bin/chromedriver
-          wget -N "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_114.0.5735"
-          CHROMEDRIVER_VERSION=$(cat LATEST_RELEASE_114.0.5735)
-          wget -N "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
+          # Download matching chromedriver
+          wget -N "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION" -O chrome_version.txt
+          CHROMEDRIVER_VERSION=$(cat chrome_version.txt)
+          echo "Matching ChromeDriver version: $CHROMEDRIVER_VERSION"
+          wget -N "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
           unzip -o chromedriver_linux64.zip
           sudo mv -f chromedriver /usr/local/bin/chromedriver
           sudo chmod +x /usr/local/bin/chromedriver
