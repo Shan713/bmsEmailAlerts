@@ -1,56 +1,52 @@
-import os
-import time
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+import requests
 import smtplib
-from email.mime.text import MIMEText
+import time
+from email.message import EmailMessage
 
-def send_email(subject, body):
-    sender = os.environ["EMAIL_SENDER"]
-    password = os.environ["EMAIL_PASSWORD"]
-    receiver = os.environ["EMAIL_RECEIVER"]
+# === Configuration ===
+URL = "https://in.bookmyshow.com/cinemas/coimbatore/broadway-cinemas-coimbatore/buytickets/BWCB/20250602"  # <- Replace with your BMS or other site URL
+CHECK_INTERVAL = 60  # Time in seconds between checks
 
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = receiver
+# === Email Settings ===
+EMAIL_ADDRESS = "shanthu2005best@gmail.com"         # <- Your Gmail address
+EMAIL_PASSWORD = "jhtn xxay yaee lusd"      # <- Use Gmail App Password (NOT your normal password)
+RECEIVER_EMAIL = "shanthu2005@gmail.com" # <- Who should receive the alert
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(sender, password)
-        server.sendmail(sender, receiver, msg.as_string())
-    print("[INFO] Email sent.")
+def send_email():
+    msg = EmailMessage()
+    msg['Subject'] = '🎟️ BMS Page is Live!'
+    msg['From'] = EMAIL_ADDRESS
+    msg['To'] = RECEIVER_EMAIL
+    msg.set_content(f"The page is live! Visit it here:\n\n{URL}")
 
-def monitor():
-    url = os.environ["BMS_URL"]
-    movie_name = os.environ.get("MOVIE_NAME", "").lower()
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+            print("✅ Email sent successfully!")
+    except Exception as e:
+        print(f"❌ Failed to send email: {e}")
 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/114.0.0.0 Safari/537.36")
+def check_site():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.7151.55 Safari/537.36"
+    }
+    try:
+        response = requests.get(URL, headers=headers, timeout=10)
+        if response.status_code == 200:
+            print(f"[{time.ctime()}] ✅ Site is live!")
+            send_email()
+            return True
+        else:
+            print(f"[{time.ctime()}] ❌ Status Code: {response.status_code}")
+    except Exception as e:
+        print(f"[{time.ctime()}] ⚠️ Error checking site: {e}")
+    return False
 
-    driver = webdriver.Chrome(options=options)
-    driver.get(url)
-
-    time.sleep(5)  # wait for page to load
-
-    page_source = driver.page_source.lower()
-    driver.quit()
-
-    if movie_name in page_source:
-        send_email(
-            "🎬 Movie Available on BookMyShow!",
-            f"The movie '{movie_name}' is listed at {url}.\nCheck and book your tickets!"
-        )
-    else:
-        print(f"[INFO] Movie '{movie_name}' not found on the page yet.")
 
 if __name__ == "__main__":
-    print("[INFO] Starting monitor...")
-    monitor()
+    print("🚀 Starting website monitor...")
+    while True:
+        if check_site():
+            break  # Stop checking after it's live and email is sent
+        time.sleep(CHECK_INTERVAL)
