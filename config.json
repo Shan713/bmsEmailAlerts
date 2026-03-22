@@ -1,0 +1,66 @@
+{
+  "user_profile": {
+    "email": "shanthu2005best@gmail.com",
+    "phone": "your_phone_number",
+    "name": "Your Name",
+    "preferred_seats": ["H8", "H9", "G8", "G9", "I8", "I9"],
+    "max_tickets": 2,
+    "preferred_cinema_chains": ["PVR", "INOX", "Cinepolis"],
+    "preferred_showtimes": {
+      "morning": ["10:00", "11:00", "12:00"],
+      "afternoon": ["13:00", "14:00", "15:00", "16:00"],
+      "evening": ["18:00", "19:00", "20:00", "21:00"],
+      "night": ["22:00", "23:00"]
+    }
+  },
+  "booking_requests": [
+    {
+      "id": "req_001",
+      "movie_name": "Coolie",
+      "date": "2025-08-15",
+      "preferred_time_range": ["evening"],
+      "cinemas": ["PVR Brookfields", "INOX Prozone"],
+      "city": "Coimbatore",
+      "max_price": 300,
+      "priority": 1,
+      "auto_book": true,
+      "status": "monitoring",
+      "created_at": "2025-02-02T10:00:00Z"
+    }
+  ],
+  "cinema_database": {
+    "Coimbatore": {
+      "PVR Brookfields": {
+        "base_url": "https://in.bookmyshow.com/coimbatore/cinemas/pvr-brookfields/PVRB",
+        "screens": ["Screen 1", "Screen 2", "Screen 3"],
+        "preferred_seats": ["H8", "H9", "G8", "G9"]
+      },
+      "INOX Prozone": {
+        "base_url": "https://in.bookmyshow.com/coimbatore/cinemas/inox-prozone-mall-coimbatore/INPR",
+        "screens": ["Audi 1", "Audi 2", "Audi 3"],
+        "preferred_seats": ["H8", "H9", "G8", "G9"]
+      }
+    }
+  },
+  "notification_settings": {
+    "email_notifications": true,
+    "sms_notifications": false,
+    "webhook_url": null,
+    "notification_recipients": [
+      "shanthu2005@gmail.com",
+      "tejeshwarcdr@gmail.com"
+    ]
+  },
+  "system_settings": {
+    "check_interval_seconds": 30,
+    "max_retry_attempts": 3,
+    "booking_timeout_minutes": 5,
+    "screenshot_enabled": true,
+    "headless_browser": false,
+    "user_agents": [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.1 Safari/605.1.15",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:104.0) Gecko/20100101 Firefox/104.0"
+    ]
+  }
+}
