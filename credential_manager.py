@@ -25,19 +25,36 @@ class SecureCredentialManager:
     def store_credentials(self):
         """Interactively store user credentials"""
         credentials = {}
-        
+
         print("Setting up your BookMyShow credentials...")
         print("Note: All data will be encrypted and stored securely.")
-        
+
         # Basic user info
         credentials['email'] = input("BookMyShow Email: ")
         credentials['phone'] = input("Phone Number: ")
         credentials['password'] = getpass.getpass("BookMyShow Password: ")
-        
+
         # Email notification settings
         credentials['notification_email'] = input("Notification Email (can be same as above): ")
         credentials['email_app_password'] = getpass.getpass("Email App Password (for notifications): ")
-        
+
+        # BMS Gift Card (optional, required for auto-payment)
+        store_gift_card = input("Store BMS Gift Card for auto-payment? (y/n): ").lower() == 'y'
+        if store_gift_card:
+            print("BMS Gift Card details (pre‑purchased card — no OTP needed):")
+            e_code = input("Gift Card E‑Code: ").strip()
+            gc_pin = getpass.getpass("Gift Card PIN: ")
+            if e_code and gc_pin:
+                credentials['gift_card'] = {
+                    'e_code': e_code,
+                    'pin': gc_pin,
+                }
+                print("✅ Gift card details stored.")
+            else:
+                print("⚠️  E‑Code or PIN was empty — gift card NOT stored.")
+        else:
+            print("ℹ️  Gift Card not stored — complete_payment() will not work.")
+
         # Payment information (optional)
         store_payment = input("Store payment info? (y/n): ").lower() == 'y'
         if store_payment:
@@ -59,13 +76,23 @@ class SecureCredentialManager:
         if not os.path.exists(self.credentials_file):
             print("No credentials found. Please run setup first.")
             return None
-        
+
         try:
             with open(self.credentials_file, 'rb') as f:
                 encrypted_data = f.read()
-            
+
             decrypted_data = self.fernet.decrypt(encrypted_data)
             credentials = json.loads(decrypted_data.decode())
+
+            # Backward compatibility: if the old wallet_pin key exists
+            # but gift_card is not set, warn the user.
+            if "wallet_pin" in credentials and "gift_card" not in credentials:
+                print(
+                    "⚠️  Legacy 'wallet_pin' found but 'gift_card' is not set. "
+                    "Payment has moved to BMS Gift Cards. "
+                    "Please re‑run:  python booking_cli.py setup-credentials"
+                )
+
             return credentials
         except Exception as e:
             print(f"Error loading credentials: {e}")

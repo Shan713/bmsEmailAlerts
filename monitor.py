@@ -8,7 +8,7 @@ import io
 import random
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-URL = "https://in.bookmyshow.com/movies/coimbatore/coolie/buytickets/ET00395817/20250815"
+URL = "https://in.bookmyshow.com/movies/chennai/spider-man-brand-new-day/buytickets/ET00447840/20260802"
 CHECK_INTERVAL = 60
 EMAIL_ADDRESS = "shanthu2005best@gmail.com"
 EMAIL_PASSWORD = "fqlb eava leom evka"
