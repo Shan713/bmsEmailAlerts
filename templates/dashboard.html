@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BMS Auto-Booking Dashboard</title>
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f5f0;
+      --card-bg: #ffffff;
+      --border: #e0dcd5;
+      --text: #2d2a24;
+      --muted: #6b6560;
+      --green: #2e7d32;
+      --green-bg: #e8f5e9;
+      --red: #c62828;
+      --red-bg: #ffebee;
+      --blue: #1565c0;
+      --blue-bg: #e3f2fd;
+      --amber: #e65100;
+      --amber-bg: #fff3e0;
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────── */
+    header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    header h1 { font-size: 1.35rem; display: flex; align-items: center; gap: 8px; }
+    header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    main { max-width: 1200px; margin: 0 auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+    }
+    .card h2 { font-size: 1.05rem; margin-bottom: 12px; color: var(--text); }
+
+    /* ── Status bar ─────────────────────────────────────────────── */
+    .status-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+    .status-item { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .status-dot.ok { background: var(--green); }
+    .status-dot.warn { background: var(--amber); }
+    .status-dot.bad { background: var(--red); }
+    .status-dot.idle { background: #999; }
+
+    .badge {
+      display: inline-block; padding: 2px 10px; border-radius: 12px;
+      font-size: 0.78rem; font-weight: 600;
+    }
+    .badge-ok { background: var(--green-bg); color: var(--green); }
+    .badge-warn { background: var(--amber-bg); color: var(--amber); }
+    .badge-bad { background: var(--red-bg); color: var(--red); }
+    .badge-info { background: var(--blue-bg); color: var(--blue); }
+
+    /* ── Buttons ────────────────────────────────────────────────── */
+    button, .btn {
+      font-family: var(--font); font-size: 0.82rem; font-weight: 600;
+      padding: 6px 14px; border-radius: var(--radius); cursor: pointer;
+      border: 1px solid transparent; transition: all 0.15s;
+      display: inline-flex; align-items: center; gap: 5px;
+      white-space: nowrap;
+    }
+    button:disabled, .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary { background: var(--blue); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #0d47a1; }
+
+    .btn-outline { background: transparent; border-color: var(--blue); color: var(--blue); }
+    .btn-outline:hover:not(:disabled) { background: var(--blue-bg); }
+
+    .btn-danger { background: transparent; border-color: var(--red); color: var(--red); }
+    .btn-danger:hover:not(:disabled) { background: var(--red-bg); }
+
+    .btn-sm { font-size: 0.75rem; padding: 3px 10px; }
+
+    /* ── Table ──────────────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    th { font-weight: 700; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.4px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafaf7; }
+    .td-actions { display: flex; gap: 6px; align-items: center; }
+
+    /* ── Log viewer ─────────────────────────────────────────────── */
+    .log-viewer {
+      background: #1e1e1e; color: #d4d4d4; border-radius: var(--radius);
+      padding: 12px 16px; font-family: var(--mono); font-size: 0.78rem;
+      max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+      line-height: 1.6;
+    }
+
+    /* ── Modal overlay (for booking spinner) ────────────────────── */
+    .overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+      z-index: 1000; align-items: center; justify-content: center;
+    }
+    .overlay.active { display: flex; }
+    .overlay-box {
+      background: var(--card-bg); border-radius: var(--radius); padding: 32px 40px;
+      text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+    .spinner {
+      width: 40px; height: 40px; margin: 0 auto 16px;
+      border: 3px solid var(--border); border-top-color: var(--blue);
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Add-request form ───────────────────────────────────────── */
+    .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group label { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+    .form-group input, .form-group select {
+      padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+      font-family: var(--font); font-size: 0.85rem;
+    }
+    .form-group input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-bg); }
+
+    /* ── Toast ──────────────────────────────────────────────────── */
+    .toast-container { position: fixed; top: 16px; right: 16px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+    .toast { padding: 10px 18px; border-radius: var(--radius); font-size: 0.85rem; animation: slideIn 0.25s ease; }
+    .toast.success { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
+    .toast.error { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* ── Responsive ─────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .form-row { flex-direction: column; }
+      header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Header                                                         -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <header>
+    <h1>🎬 BMS Auto‑Booking</h1>
+    <div class="actions">
+      <button class="btn-outline btn-sm" onclick="toggleAddForm()" id="btn-add-toggle">
+        ＋ Add Request
+      </button>
+    </div>
+  </header>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Toast container                                                -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="toast-container" id="toasts"></div>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Main content                                                   -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <main>
+
+    <!-- ── System Status ─────────────────────────────────────────── -->
+    <div class="card">
+      <h2>📊 System Status</h2>
+      <div class="status-grid" id="status-bar">
+        <div class="status-item">
+          <span class="status-dot idle" id="status-booking-dot"></span>
+          <span>Booking: <strong id="status-booking-text">
+            {% if is_booking %}🔄 Processing {{ current_booking_id }}…
+            {% else %}idle{% endif %}
+          </strong></span>
+        </div>
+        <div class="status-item">
+          <span>Last result:</span>
+          <span id="status-last-result">
+            {% if last_result %}
+              {% if last_result.success %}
+                <span class="badge badge-ok">✅ {{ last_result.movie_name }} — Booked!</span>
+              {% elif last_result.dry_run %}
+                <span class="badge badge-info">🔍 {{ last_result.movie_name }} — Dry‑run OK</span>
+              {% else %}
+                <span class="badge badge-bad">❌ {{ last_result.movie_name }} — {{ last_result.error[:60] }}</span>
+              {% endif %}
+            {% else %}
+              <span class="badge badge-info">No bookings yet</span>
+            {% endif %}
+          </span>
+        </div>
+      </div>
+      {% if errors %}
+      <div style="margin-top: 12px; font-size: 0.8rem; color: var(--red);" id="error-list">
+        {% for e in errors %}
+        <div>⚠️ [{{ e.timestamp }}] {{ e.message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- ── Booking Requests Table ─────────────────────────────────── -->
+    <div class="card">
+      <h2>📋 Booking Requests</h2>
+      {% if booking_requests %}
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Movie</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Cinemas</th>
+              <th>Auto</th>
+              <th>Payment</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="requests-table-body">
+            {% for req in booking_requests %}
+            <tr id="row-{{ req.id }}">
+              <td><strong>{{ req.movie_name }}</strong></td>
+              <td>{{ req.date }}</td>
+              <td>{{ ', '.join(req.preferred_time_range) if req.preferred_time_range else '—' }}</td>
+              <td>{{ ', '.join(req.cinemas) if req.cinemas else 'any' }}</td>
+              <td>{% if req.auto_book %}✅{% else %}—{% endif %}</td>
+              <td><span class="badge badge-info">{{ req.get('payment_method', 'upi') | upper }}</span></td>
+              <td>
+                {% set status = req.get('status', 'monitoring') %}
+                {% if status == 'booked' %}
+                  <span class="badge badge-ok">booked</span>
+                {% elif status == 'monitoring' %}
+                  <span class="badge badge-info">monitoring</span>
+                {% elif status == 'active' %}
+                  <span class="badge badge-warn">active</span>
+                {% else %}
+                  <span class="badge">{{ status }}</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="td-actions">
+                  <button class="btn-primary btn-sm"
+                          onclick="bookRequest('{{ req.id }}', false)"
+                          id="btn-book-{{ req.id }}">
+                    🎟️ Book Now
+                  </button>
+                  <button class="btn-outline btn-sm"
+                          onclick="bookRequest('{{ req.id }}', true)"
+                          id="btn-dry-{{ req.id }}">
+                    🔍 Dry‑Run
+                  </button>
+                  <button class="btn-danger btn-sm"
+                          onclick="deleteRequest('{{ req.id }}')">
+                    🗑️
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p style="color: var(--muted);">No booking requests configured. Click "＋ Add Request" to add one.</p>
+      {% endif %}
+
+      <!-- ── Add Request Form (hidden by default) ──────────────── -->
+      <div id="add-request-form" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+        <h3 style="font-size: 0.95rem; margin-bottom: 12px;">New Booking Request</h3>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Movie Name *</label>
+            <input type="text" id="add-movie" placeholder="e.g. Coolie" style="min-width: 180px;">
+          </div>
+          <div class="form-group">
+            <label>Date *</label>
+            <input type="date" id="add-date">
+          </div>
+          <div class="form-group">
+            <label>City</label>
+            <input type="text" id="add-city" placeholder="Coimbatore" style="min-width: 140px;">
+          </div>
+          <div class="form-group">
+            <label>Time Range</label>
+            <select id="add-time">
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+              <option value="evening" selected>Evening</option>
+              <option value="night">Night</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Cinemas (comma-separated)</label>
+            <input type="text" id="add-cinemas" placeholder="PVR Brookfields, INOX" style="min-width: 200px;">
+          </div>
+          <div class="form-group">
+            <label>Payment Method</label>
+            <select id="add-payment">
+              <option value="upi" selected>UPI (Phone Approval)</option>
+              <option value="gift_card">Gift Card</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Booking URL (optional)</label>
+            <input type="text" id="add-url" placeholder="https://in.bookmyshow.com/..." style="min-width: 350px;">
+          </div>
+          <div class="form-group" style="align-self: flex-end;">
+            <button class="btn-primary" onclick="addRequest()">➕ Add</button>
+            <button class="btn-outline" onclick="toggleAddForm()">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Log Viewer ───────────────────────────────────────────── -->
+    <div class="card">
+      <h2>📜 Logs <span style="font-weight:400;font-size:0.78rem;color:var(--muted);">(auto‑refresh 5s)</span></h2>
+      <div class="log-viewer" id="log-viewer">
+        {% for line in log_lines %}{{ line }}
+        {% endfor %}
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Booking overlay (spinner)                                      -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="overlay" id="booking-overlay">
+    <div class="overlay-box">
+      <div class="spinner"></div>
+      <p><strong id="overlay-text">Booking in progress…</strong></p>
+      <p style="color:var(--muted);font-size:0.82rem;margin-top:4px;">This may take 20–30 seconds</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Scripts                                                        -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <script>
+    // ── Toast ──────────────────────────────────────────────────────
+    function toast(msg, type) {
+      const container = document.getElementById('toasts');
+      const el = document.createElement('div');
+      el.className = `toast ${type}`;
+      el.textContent = msg;
+      container.appendChild(el);
+      setTimeout(() => el.remove(), 4000);
+    }
+
+    // ── Book request ───────────────────────────────────────────────
+    async function bookRequest(requestId, dryRun) {
+      const overlay = document.getElementById('booking-overlay');
+      const overlayText = document.getElementById('overlay-text');
+      overlayText.textContent = dryRun
+        ? `Dry‑run: ${requestId}…`
+        : `Booking: ${requestId}…`;
+      overlay.classList.add('active');
+
+      // Disable all booking buttons
+      document.querySelectorAll('button[id^="btn-book-"], button[id^="btn-dry-"]')
+        .forEach(b => b.disabled = true);
+
+      try {
+        const url = `/api/book/${encodeURIComponent(requestId)}?dry_run=${dryRun}`;
+        const resp = await fetch(url, { method: 'POST' });
+        const data = await resp.json();
+
+        if (resp.status === 409) {
+          toast(`⚠️ ${data.error} (${data.current_booking_id})`, 'error');
+        } else if (data.success) {
+          toast(`🎉 Booking confirmed for ${data.movie_name}!`, 'success');
+        } else if (data.dry_run) {
+          toast(`🔍 Dry‑run complete for ${data.movie_name}`, 'success');
+        } else {
+          toast(`❌ Booking failed: ${data.error ? data.error.slice(0,80) : 'Unknown'}`, 'error');
+        }
+      } catch (err) {
+        toast(`⚠️ Connection error: ${err.message}`, 'error');
+      } finally {
+        overlay.classList.remove('active');
+        document.querySelectorAll('button[id^="btn-book-"], button[id^="btn-dry-"]')
+          .forEach(b => b.disabled = false);
+        refreshStatus();
+        refreshLogs();
+      }
+    }
+
+    // ── Delete request ─────────────────────────────────────────────
+    async function deleteRequest(requestId) {
+      if (!confirm(`Delete booking request '${requestId}'?`)) return;
+
+      try {
+        const resp = await fetch(`/api/delete-request/${encodeURIComponent(requestId)}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (resp.ok) {
+          toast(`🗑️ Deleted ${requestId}`, 'success');
+          // Remove row from table
+          const row = document.getElementById(`row-${requestId}`);
+          if (row) row.remove();
+        } else {
+          toast(`❌ ${data.detail || 'Delete failed'}`, 'error');
+        }
+      } catch (err) {
+        toast(`⚠️ ${err.message}`, 'error');
+      }
+    }
+
+    // ── Add request ────────────────────────────────────────────────
+    document.getElementById('add-date').value = new Date().toISOString().split('T')[0];
+
+    function toggleAddForm() {
+      const form = document.getElementById('add-request-form');
+      const btn = document.getElementById('btn-add-toggle');
+      form.style.display = form.style.display === 'none' ? 'block' : 'none';
+      btn.textContent = form.style.display === 'none' ? '＋ Add Request' : '－ Cancel';
+    }
+
+    async function addRequest() {
+      const movie = document.getElementById('add-movie').value.trim();
+      const date = document.getElementById('add-date').value;
+      const city = document.getElementById('add-city').value.trim();
+      const time = document.getElementById('add-time').value;
+      const cinemasRaw = document.getElementById('add-cinemas').value.trim();
+      const url = document.getElementById('add-url').value.trim();
+      const paymentMethod = document.getElementById('add-payment').value;
+
+      if (!movie || !date) {
+        toast('⚠️ Movie name and date are required.', 'error');
+        return;
+      }
+
+      const cinemas = cinemasRaw ? cinemasRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+      try {
+        const resp = await fetch('/api/add-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            movie_name: movie,
+            date: date,
+            city: city,
+            preferred_time_range: [time],
+            cinemas: cinemas,
+            booking_url: url || null,
+            auto_book: true,
+            payment_method: paymentMethod,
+          }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          toast(`✅ Added ${data.request.movie_name} (${data.request.id})`, 'success');
+          // Reload to show new row
+          setTimeout(() => location.reload(), 800);
+        } else {
+          toast(`❌ ${data.detail || 'Failed'}`, 'error');
+        }
+      } catch (err) {
+        toast(`⚠️ ${err.message}`, 'error');
+      }
+    }
+
+    // ── Status polling ─────────────────────────────────────────────
+    async function refreshStatus() {
+      try {
+        const resp = await fetch('/api/status');
+        const data = await resp.json();
+
+        // Booking dot
+        const bookingDot = document.getElementById('status-booking-dot');
+        const bookingText = document.getElementById('status-booking-text');
+        if (data.is_booking) {
+          bookingDot.className = 'status-dot ok';
+          bookingText.textContent = `🔄 Processing ${data.current_booking_id}…`;
+        } else {
+          bookingDot.className = 'status-dot idle';
+          bookingText.textContent = 'idle';
+        }
+
+        // Last result
+        if (data.last_result) {
+          const r = data.last_result;
+          const el = document.getElementById('status-last-result');
+          if (r.success) {
+            el.innerHTML = `<span class="badge badge-ok">✅ ${r.movie_name} — Booked!</span>`;
+          } else if (r.dry_run) {
+            el.innerHTML = `<span class="badge badge-info">🔍 ${r.movie_name} — Dry‑run OK</span>`;
+          } else {
+            el.innerHTML = `<span class="badge badge-bad">❌ ${r.movie_name} — ${(r.error||'').slice(0,60)}</span>`;
+          }
+        }
+      } catch (err) { /* silent */ }
+    }
+
+    // ── Log polling ────────────────────────────────────────────────
+    async function refreshLogs() {
+      try {
+        const resp = await fetch('/api/logs?lines=60');
+        const data = await resp.json();
+        const viewer = document.getElementById('log-viewer');
+        viewer.textContent = data.lines.join('\n');
+        viewer.scrollTop = viewer.scrollHeight;
+      } catch (err) { /* silent */ }
+    }
+
+    // ── Start polling ──────────────────────────────────────────────
+    setInterval(refreshStatus, 3000);
+    setInterval(refreshLogs, 5000);
+  </script>
+</body>
+</html>

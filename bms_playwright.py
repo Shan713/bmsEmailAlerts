@@ -1,9 +1,8 @@
 """
 BookMyShow automation module using Playwright.
 
-Provides a BMSPlaywrightAutomator class that replaces/extends the Selenium-based
-automation in automated_booking_agent.py with Playwright for better stealth,
-reliability, and persistent-session support.
+Provides a BMSPlaywrightAutomator class for browser automation with
+stealth evasions, show search, seat selection, and gift-card payment.
 
 Usage:
     import asyncio
@@ -14,7 +13,6 @@ Usage:
         bms = BMSPlaywrightAutomator(config)
         browser, context, page = await bms.start()
         try:
-            await bms.login(page)
             shows = await bms.find_shows(page, "Coolie", "2025-08-15", (18, 22))
             for s in shows:
                 print(s)
@@ -43,13 +41,6 @@ logger = logging.getLogger(__name__)
 # Custom exceptions
 # ---------------------------------------------------------------------------
 
-class LoginRequired(Exception):
-    """Raised when the user must manually log in (e.g. OTP is required)."""
-
-    def __init__(self, message: str = "Manual login required. Please log in once so cookies can be persisted."):
-        super().__init__(message)
-
-
 class BMSAutomationError(Exception):
     """Generic error for BMS automation failures."""
 
@@ -68,7 +59,7 @@ class MissingGiftCardCredentials(BMSAutomationError):
 
     def __init__(self, message: str = (
         "Gift card credentials not found. "
-        "Run 'python booking_cli.py setup-credentials' and store your "
+        "Run 'python setup_creds.py' and store your "
         "BMS Gift Card e‑code and PIN."
     )):
         super().__init__(message)
@@ -95,12 +86,36 @@ class PaymentFailed(BMSAutomationError):
         super().__init__(reason)
 
 
+class PaymentMethodNotFound(BMSAutomationError):
+    """Raised when the requested payment method is not available on the page."""
+
+    def __init__(self, message: str = "Payment method not found on payment page."):
+        super().__init__(message)
+
+
+class MissingUPIID(BMSAutomationError):
+    """Raised when UPI ID is not set in stored credentials."""
+
+    def __init__(self, message: str = (
+        "UPI ID not found. "
+        "Run 'python setup_creds.py' and enter your UPI ID "
+        "(e.g., username@okhdfcbank)."
+    )):
+        super().__init__(message)
+
+
+class PaymentTimeout(BMSAutomationError):
+    """Raised when the UPI payment approval times out."""
+
+    def __init__(self, message: str = "UPI payment approval timed out after 120 seconds."):
+        super().__init__(message)
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 BMS_BASE_URL = "https://in.bookmyshow.com"
-BMS_PROFILE_URL = "https://in.bookmyshow.com/profile"
 
 # Fallback user-agent used when config.json has no user_agents list.
 _FALLBACK_UA = (
@@ -223,20 +238,15 @@ class BMSPlaywrightAutomator:
         The parsed contents of ``config.json``.
     credentials_file : str
         Path to the encrypted credentials file (default ``credentials.enc``).
-    user_data_dir : str
-        Directory for persistent browser data (cookies, localStorage).
-        Defaults to ``./browser_data``.
     """
 
     def __init__(
         self,
         config: Dict[str, Any],
         credentials_file: str = "credentials.enc",
-        user_data_dir: str = "./browser_data",
     ) -> None:
         self.config = config
         self.credentials_file = credentials_file
-        self.user_data_dir = os.path.abspath(user_data_dir)
 
         # Lazy-loaded references
         self._playwright = None
@@ -290,7 +300,7 @@ class BMSPlaywrightAutomator:
         creds = mgr.get_credentials()
         if creds is None:
             raise BMSAutomationError(
-                "No credentials found. Run 'python booking_cli.py setup-credentials' first."
+                "No credentials found. Run 'python setup_creds.py' first."
             )
         self._credentials = creds
         return creds
@@ -310,12 +320,15 @@ class BMSPlaywrightAutomator:
         return self.city.strip().lower().replace(" ", "-")
 
     # ------------------------------------------------------------------
-    # start() — launch browser with persistent context + stealth
+    # start() — launch browser with stealth evasions
     # ------------------------------------------------------------------
 
     async def start(self) -> Tuple[Any, Any, Any]:
         """
-        Launch a persistent Chromium context with stealth evasions.
+        Launch a Chromium browser with stealth evasions.
+
+        Uses a standard non‑persistent context — no saved sessions needed
+        since BMS does not require login before checkout.
 
         Returns
         -------
@@ -334,11 +347,19 @@ class BMSPlaywrightAutomator:
             ) from exc
 
         try:
-            from playwright_stealth import stealth_async  # type: ignore[import-untyped]
-            _stealth_available = True
+            try:
+                from playwright_stealth import stealth_async  # type: ignore[import-untyped]
+                _stealth_available = True
+                _stealth_apply = stealth_async
+            except ImportError:
+                # playwright-stealth >= 2.0 uses the Stealth class.
+                from playwright_stealth import Stealth  # type: ignore[import-untyped]
+                _stealth_available = True
+                _stealth_apply = Stealth().apply_stealth_async
             logger.info("playwright-stealth loaded — evasion enabled.")
         except ImportError:
             _stealth_available = False
+            _stealth_apply = None
             logger.warning(
                 "playwright-stealth not installed. Bot detection evasion will be "
                 "weaker. Install it with:  pip install playwright-stealth"
@@ -346,43 +367,36 @@ class BMSPlaywrightAutomator:
 
         self._playwright = await async_playwright().start()
 
-        os.makedirs(self.user_data_dir, exist_ok=True)
         user_agent = self._pick_user_agent()
 
         logger.info(
-            "Launching persistent Chromium (headless=%s, user_data_dir=%s)",
+            "Launching Chromium (headless=%s)",
             self.headless,
-            self.user_data_dir,
         )
         logger.debug("User-Agent: %s", user_agent)
 
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=self.user_data_dir,
+        self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
-            viewport={"width": 1280, "height": 800},
-            user_agent=user_agent,
             args=[
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
             ],
-            # Disable unnecessary permissions prompts.
+        )
+
+        self._context = await self._browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=user_agent,
             permissions=[],
             locale="en-IN",
             timezone_id="Asia/Kolkata",
         )
 
-        self._browser = self._context.browser  # type: ignore[attr-defined]
-
-        # Create a default page (the persistent context already has one).
-        if len(self._context.pages) > 0:
-            page = self._context.pages[0]
-        else:
-            page = await self._context.new_page()
+        page = await self._context.new_page()
 
         # Apply stealth patches to the page.
-        if _stealth_available:
-            await stealth_async(page)
+        if _stealth_available and _stealth_apply is not None:
+            await _stealth_apply(page)
             logger.debug("Stealth patches applied to page.")
 
         # Set default timeouts.
@@ -391,180 +405,6 @@ class BMSPlaywrightAutomator:
 
         logger.info("Browser ready.  Page title: %s", await page.title())
         return self._browser, self._context, page
-
-    # ------------------------------------------------------------------
-    # login(page) — sign in to BookMyShow
-    # ------------------------------------------------------------------
-
-    async def login(self, page: "playwright.async_api.Page") -> bool:
-        """
-        Log into BookMyShow, reusing persistent cookies when possible.
-
-        Strategy
-        --------
-        1. Navigate to the profile page.  If the page shows account
-           information (not a login form), we consider the session valid.
-        2. Otherwise, navigate to the homepage, click Sign In, enter the
-           email from stored credentials, and click Continue.
-        3. If BMS presents an OTP challenge, raise ``LoginRequired`` so
-           the caller can prompt the user to log in manually once.
-
-        Returns
-        -------
-        bool
-            True if logged in (or already logged in), False if login could
-            not be completed.
-        """
-        logger.info("Checking login state …")
-
-        # --- Step 1: check for existing session ---------------------------
-        try:
-            await page.goto(BMS_PROFILE_URL, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
-            await page.wait_for_timeout(2000)
-        except Exception as exc:
-            logger.warning("Profile page load failed: %s", exc)
-
-        current_url = page.url
-        logger.debug("Current URL after profile navigation: %s", current_url)
-
-        # If we stayed on /profile and there's no login modal, we're logged in.
-        if "/profile" in current_url or "/myprofile" in current_url:
-            # Double-check we're not on a login page masquerading as profile.
-            login_indicators = await page.query_selector_all(
-                "text=/Sign ?In/i, text=/Login/i, input[type='email'], input[name='email']"
-            )
-            if len(login_indicators) == 0:
-                logger.info("✅ Already logged in (session cookie valid).")
-                return True
-
-        # --- Step 2: navigate to homepage and initiate login ---------------
-        logger.info("Not logged in.  Starting email-based login flow …")
-        await page.goto(BMS_BASE_URL, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
-        await page.wait_for_timeout(2000)
-
-        # Click the sign-in / profile button.
-        signin_selectors = [
-            "text=/Sign ?In/i",
-            "[data-testid='signin-btn']",
-            ".signin-btn",
-            "button:has-text('Sign In')",
-            "a:has-text('Sign In')",
-            "[class*='signin']",
-            "[class*='login']",
-            "img[alt*='profile' i]",
-            "svg[alt*='profile' i]",
-            "[aria-label*='Sign In' i]",
-            "[aria-label*='profile' i]",
-        ]
-        clicked = False
-        for sel in signin_selectors:
-            try:
-                el = await page.wait_for_selector(sel, timeout=3000)
-                if el:
-                    logger.info("Clicking sign-in element: %s", sel)
-                    await el.click()
-                    await page.wait_for_timeout(2000)
-                    clicked = True
-                    break
-            except Exception:
-                continue
-
-        if not clicked:
-            raise BMSAutomationError(
-                "Could not find the Sign In button on the BMS homepage. "
-                "The page layout may have changed."
-            )
-
-        # --- Step 3: enter email -------------------------------------------
-        creds = self._load_credentials()
-        email = creds.get("email", "")
-        if not email:
-            raise BMSAutomationError("No email found in stored credentials.")
-
-        email_selectors = [
-            "input[type='email']",
-            "input[name='email']",
-            "input[id*='email' i]",
-            "input[placeholder*='email' i]",
-            "input[placeholder*='Email' i]",
-        ]
-        email_field = None
-        for sel in email_selectors:
-            try:
-                email_field = await page.wait_for_selector(sel, timeout=5000)
-                if email_field:
-                    logger.debug("Found email field: %s", sel)
-                    break
-            except Exception:
-                continue
-
-        if email_field is None:
-            raise BMSAutomationError("Could not find the email input field.")
-
-        await email_field.fill(email)
-        logger.info("Filled email: %s", email)
-
-        # --- Step 4: click "Continue" --------------------------------------
-        continue_selectors = [
-            "button:has-text('Continue')",
-            "text=Continue",
-            "[data-testid='continue-btn']",
-            "button[type='submit']",
-            "input[type='submit']",
-        ]
-        continued = False
-        for sel in continue_selectors:
-            try:
-                btn = await page.wait_for_selector(sel, timeout=3000)
-                if btn:
-                    await btn.click()
-                    logger.info("Clicked 'Continue'.")
-                    await page.wait_for_timeout(3000)
-                    continued = True
-                    break
-            except Exception:
-                continue
-
-        if not continued:
-            raise BMSAutomationError("Could not click 'Continue' after entering email.")
-
-        # --- Step 5: detect OTP challenge ----------------------------------
-        otp_indicators = [
-            "text=/OTP/i",
-            "text=/verification code/i",
-            "text=/Enter.*code/i",
-            "input[type='tel']",
-            "input[maxlength='4']",
-            "input[maxlength='6']",
-            "[data-testid='otp-input']",
-        ]
-        for sel in otp_indicators:
-            try:
-                el = await page.wait_for_selector(sel, timeout=3000)
-                if el:
-                    logger.warning("OTP challenge detected — manual login required.")
-                    raise LoginRequired(
-                        "BookMyShow is asking for an OTP. "
-                        "Please run the automator in headed mode once "
-                        "(headless_browser: false) and log in manually. "
-                        "Your session cookies will be saved in the "
-                        "browser_data directory for future runs."
-                    )
-            except LoginRequired:
-                raise
-            except Exception:
-                continue
-
-        # If we reach here, check whether we ended up on a profile/dashboard page.
-        await page.wait_for_timeout(2000)
-        current_url = page.url
-        if "/profile" in current_url or "/myprofile" in current_url or "/buytickets" in current_url:
-            logger.info("✅ Login successful.")
-            return True
-
-        # Couldn't determine state — assume partial success.
-        logger.info("Login flow completed — session may be active.")
-        return True
 
     # ------------------------------------------------------------------
     # find_shows(page, movie_name, date, time_range, *, booking_url=None)
@@ -2075,7 +1915,104 @@ class BMSPlaywrightAutomator:
         await page.wait_for_timeout(1500)
 
         # ------------------------------------------------------------------
-        # 2. Select Gift Card / Voucher payment method
+        # 2. Fill contact details (email + phone) for ticket delivery
+        # ------------------------------------------------------------------
+        logger.info("[payment] Filling contact details for ticket delivery …")
+        creds = self._load_credentials()
+        user_details = creds.get("user_details", {})
+        contact_email = user_details.get("email", "")
+        contact_phone = user_details.get("phone", "")
+
+        if not contact_email or not contact_phone:
+            logger.warning(
+                "[payment] Missing contact details in credentials — "
+                "email and phone may need to be filled manually. "
+                "Run:  python setup_creds.py"
+            )
+
+        # Look for "Continue as Guest" or similar bypass options
+        guest_selectors = [
+            "text=/Continue as Guest/i",
+            "text=/Guest Checkout/i",
+            "text=/Skip Login/i",
+            "button:has-text('Guest')",
+            "a:has-text('Guest')",
+        ]
+        for sel in guest_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    logger.info("[payment] Clicking guest checkout: %s", sel)
+                    await el.click()
+                    await page.wait_for_timeout(1500)
+                    break
+            except Exception:
+                continue
+
+        if contact_email:
+            email_selectors = [
+                "input[type='email']",
+                "input[name='email']",
+                "input[id*='email' i]",
+                "input[placeholder*='email' i]",
+                "input[placeholder*='Email']",
+                "input[aria-label*='email' i]",
+            ]
+            email_filled = False
+            for sel in email_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click()
+                        await page.wait_for_timeout(200)
+                        await el.fill("")
+                        await el.type(contact_email, delay=60)
+                        logger.info("[payment] Filled email: %s", contact_email)
+                        email_filled = True
+                        break
+                except Exception:
+                    continue
+            if not email_filled:
+                logger.warning(
+                    "[payment] Could not find email input on payment page — "
+                    "email may need to be filled manually."
+                )
+
+        if contact_phone:
+            phone_selectors = [
+                "input[type='tel']",
+                "input[name='phone']",
+                "input[name='mobile']",
+                "input[id*='phone' i]",
+                "input[id*='mobile' i]",
+                "input[placeholder*='phone' i]",
+                "input[placeholder*='mobile' i]",
+                "input[aria-label*='phone' i]",
+            ]
+            phone_filled = False
+            for sel in phone_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click()
+                        await page.wait_for_timeout(200)
+                        await el.fill("")
+                        await el.type(contact_phone, delay=60)
+                        logger.info("[payment] Filled phone: %s", contact_phone)
+                        phone_filled = True
+                        break
+                except Exception:
+                    continue
+            if not phone_filled:
+                logger.warning(
+                    "[payment] Could not find phone input on payment page — "
+                    "phone may need to be filled manually."
+                )
+
+        await page.wait_for_timeout(1000)
+
+        # ------------------------------------------------------------------
+        # 3. Select Gift Card / Voucher payment method
         # ------------------------------------------------------------------
         logger.info("[payment] Selecting Gift Card / Voucher …")
 
@@ -2147,16 +2084,15 @@ class BMSPlaywrightAutomator:
             )
 
         # ------------------------------------------------------------------
-        # 3. Retrieve gift card credentials
+        # 4. Retrieve gift card credentials (reuses cached creds from step 2)
         # ------------------------------------------------------------------
         logger.info("[payment] Retrieving gift card credentials …")
-        creds = self._load_credentials()
 
         gift_card = creds.get("gift_card")
         if not isinstance(gift_card, dict):
             raise MissingGiftCardCredentials(
                 "No gift_card entry found in credentials. "
-                "Run 'python booking_cli.py setup-credentials' "
+                "Run 'python setup_creds.py' "
                 "and store your BMS Gift Card e‑code and PIN."
             )
 
@@ -2165,13 +2101,13 @@ class BMSPlaywrightAutomator:
         if not e_code or not pin:
             raise MissingGiftCardCredentials(
                 "Gift card e‑code or PIN is missing. "
-                "Run 'python booking_cli.py setup-credentials' "
+                "Run 'python setup_creds.py' "
                 "and ensure both fields are stored."
             )
         logger.info("[payment] Gift card e‑code: %s**** (PIN hidden)", e_code[:4])
 
         # ------------------------------------------------------------------
-        # 4. Fill e‑code and PIN, then click Apply / Redeem
+        # 5. Fill e‑code and PIN, then click Apply / Redeem
         # ------------------------------------------------------------------
         # --- e‑code field ---
         ecode_selectors = [
@@ -2303,7 +2239,7 @@ class BMSPlaywrightAutomator:
             await page.wait_for_timeout(3000)
 
         # ------------------------------------------------------------------
-        # 5. Check gift card balance after applying
+        # 6. Check gift card balance after applying
         # ------------------------------------------------------------------
         logger.info("[payment] Reading gift card balance from page …")
         balance: Optional[float] = None
@@ -2362,7 +2298,7 @@ class BMSPlaywrightAutomator:
             )
 
         # ------------------------------------------------------------------
-        # 5b. Dry‑run — stop before clicking Pay Now
+        # 6b. Dry‑run — stop before clicking Pay Now
         # ------------------------------------------------------------------
         if dry_run:
             logger.info(
@@ -2391,7 +2327,7 @@ class BMSPlaywrightAutomator:
             }
 
         # ------------------------------------------------------------------
-        # 6. Click "Pay Now" / "Confirm"
+        # 7. Click "Pay Now" / "Confirm"
         # ------------------------------------------------------------------
         logger.info("[payment] Clicking 'Pay Now' / 'Confirm' …")
         pay_selectors = [
@@ -2425,7 +2361,7 @@ class BMSPlaywrightAutomator:
             )
 
         # ------------------------------------------------------------------
-        # 7. Wait for confirmation and extract booking details
+        # 8. Wait for confirmation and extract booking details
         # ------------------------------------------------------------------
         logger.info("[payment] Waiting for booking confirmation …")
         await page.wait_for_timeout(5000)
@@ -2563,9 +2499,533 @@ class BMSPlaywrightAutomator:
         logger.info("[payment] ✅ Payment complete — booking_id=%s", booking_id)
         return result
 
+    # ------------------------------------------------------------------
+    # complete_payment_upi — UPI push-payment flow (primary method)
+    # ------------------------------------------------------------------
 
+    async def complete_payment_upi(
+        self,
+        page: "playwright.async_api.Page",
+        expected_amount: Optional[float] = None,
+        *,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Complete booking using **UPI** (push notification to the user's phone).
+
+        Call this **after** :meth:`select_best_seats`.  The method:
+
+        1. Waits for the payment-options page.
+        2. Fills contact details (email + phone) for ticket delivery.
+        3. Selects "UPI" as the payment method.
+        4. Fills the UPI ID from stored credentials.
+        5. Clicks "Verify" / "Proceed" to trigger the UPI push notification.
+        6. Polls for up to 120 s for the confirmation page.
+        7. Extracts booking details and saves a screenshot.
+
+        In dry‑run mode stops after step 5 and does not poll.
+
+        Parameters
+        ----------
+        page : Page
+            Active Playwright page on the payment-options screen.
+        expected_amount : float, optional
+            Logged for reference (UPI balance not checked).
+        dry_run : bool, keyword-only
+            When ``True``, stops after clicking "Verify" — never waits for
+            phone approval.
+
+        Returns
+        -------
+        dict
+            Same structure as :meth:`complete_payment`.
+
+        Raises
+        ------
+        PaymentMethodNotFound
+            If the UPI option does not appear on the payment page.
+        MissingUPIID
+            If UPI ID is not set in stored credentials.
+        PaymentTimeout
+            If the confirmation page does not appear within 120 s.
+        """
+        # ------------------------------------------------------------------
+        # 1. Wait for payment-options page
+        # ------------------------------------------------------------------
+        logger.info("[payment-upi] Waiting for payment-options page …")
+        payment_page_indicators = [
+            "[data-testid='payment-options']",
+            ".payment-options",
+            ".payment-methods",
+            "[class*='payment']",
+            "text=/select.*payment/i",
+            "text=/choose.*payment/i",
+            "text=/payment.*method/i",
+        ]
+        found = False
+        for sel in payment_page_indicators:
+            try:
+                el = await page.wait_for_selector(sel, timeout=10_000)
+                if el:
+                    logger.debug("[payment-upi] Payment page detected via '%s'.", sel)
+                    found = True
+                    break
+            except Exception:
+                continue
+
+        if not found:
+            try:
+                body = await page.inner_text("body")
+                if any(phrase in body.lower() for phrase in (
+                    "gift card", "voucher", "redeem", "pay now",
+                    "payment", "cards", "upi", "net banking",
+                )):
+                    logger.info("[payment-upi] Payment-related text found (broad match).")
+                    found = True
+            except Exception:
+                pass
+
+        if not found:
+            raise PaymentPageNotFound(
+                "Payment options page did not load within 10 seconds. "
+                "Current URL: " + page.url
+            )
+
+        await page.wait_for_timeout(1500)
+
+        # ------------------------------------------------------------------
+        # 2. Fill contact details (email + phone) for ticket delivery
+        # ------------------------------------------------------------------
+        logger.info("[payment-upi] Filling contact details …")
+        creds = self._load_credentials()
+        user_details = creds.get("user_details", {})
+        contact_email = user_details.get("email", "")
+        contact_phone = user_details.get("phone", "")
+
+        if not contact_email or not contact_phone:
+            logger.warning(
+                "[payment-upi] Missing contact details — email/phone may "
+                "need to be filled manually. Run:  python setup_creds.py"
+            )
+
+        # "Continue as Guest" or similar bypass
+        guest_selectors = [
+            "text=/Continue as Guest/i",
+            "text=/Guest Checkout/i",
+            "text=/Skip Login/i",
+            "button:has-text('Guest')",
+            "a:has-text('Guest')",
+        ]
+        for sel in guest_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    logger.info("[payment-upi] Clicking guest checkout: %s", sel)
+                    await el.click()
+                    await page.wait_for_timeout(1500)
+                    break
+            except Exception:
+                continue
+
+        if contact_email:
+            email_selectors = [
+                "input[type='email']",
+                "input[name='email']",
+                "input[id*='email' i]",
+                "input[placeholder*='email' i]",
+                "input[placeholder*='Email']",
+                "input[aria-label*='email' i]",
+            ]
+            for sel in email_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click()
+                        await page.wait_for_timeout(200)
+                        await el.fill("")
+                        await el.type(contact_email, delay=60)
+                        logger.info("[payment-upi] Filled email: %s", contact_email)
+                        break
+                except Exception:
+                    continue
+
+        if contact_phone:
+            phone_selectors = [
+                "input[type='tel']",
+                "input[name='phone']",
+                "input[name='mobile']",
+                "input[id*='phone' i]",
+                "input[id*='mobile' i]",
+                "input[placeholder*='phone' i]",
+                "input[placeholder*='mobile' i]",
+                "input[aria-label*='phone' i]",
+            ]
+            for sel in phone_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click()
+                        await page.wait_for_timeout(200)
+                        await el.fill("")
+                        await el.type(contact_phone, delay=60)
+                        logger.info("[payment-upi] Filled phone: %s", contact_phone)
+                        break
+                except Exception:
+                    continue
+
+        await page.wait_for_timeout(1000)
+
+        # ------------------------------------------------------------------
+        # 3. Select "UPI" as payment method
+        # ------------------------------------------------------------------
+        logger.info("[payment-upi] Selecting UPI payment method …")
+
+        upi_selectors = [
+            "text=/UPI/i",
+            "text=/Google Pay/i",
+            "text=/PhonePe/i",
+            "text=/Paytm/i",
+            "text=/BHIM/i",
+            "input[type='radio'][value*='upi' i]",
+            "input[type='radio'][id*='upi' i]",
+            "label[for*='upi' i]",
+            "[data-testid='upi-option']",
+            "[data-testid='upi-tab']",
+            ".upi-option",
+            ".upi-tab",
+            "img[alt*='UPI' i]",
+            "img[alt*='upi' i]",
+            "div:has-text('UPI')",
+            "span:has-text('UPI')",
+            "button:has-text('UPI')",
+            "a:has-text('UPI')",
+        ]
+        upi_selected = False
+        for sel in upi_selectors:
+            try:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    logger.info("[payment-upi] Selecting UPI via: %s", sel)
+                    await el.click()
+                    await page.wait_for_timeout(1500)
+                    upi_selected = True
+                    break
+            except Exception:
+                continue
+
+        # Try "More Options" / "Wallets" tabs that may hide UPI
+        if not upi_selected:
+            more_selectors = [
+                "text=/More Options/i",
+                "text=/More/i",
+                "text=/Wallets/i",
+                "text=/Other/i",
+            ]
+            for sel in more_selectors:
+                try:
+                    tab = await page.query_selector(sel)
+                    if tab and await tab.is_visible():
+                        logger.info("[payment-upi] Expanding tab: %s", sel)
+                        await tab.click()
+                        await page.wait_for_timeout(1000)
+                        # Try UPI selectors again after expanding
+                        for upi_sel in upi_selectors:
+                            try:
+                                el = await page.query_selector(upi_sel)
+                                if el and await el.is_visible():
+                                    await el.click()
+                                    await page.wait_for_timeout(1500)
+                                    upi_selected = True
+                                    logger.info("[payment-upi] Selected UPI after expanding tab.")
+                                    break
+                            except Exception:
+                                continue
+                        if upi_selected:
+                            break
+                except Exception:
+                    continue
+
+        if not upi_selected:
+            raise PaymentMethodNotFound("UPI option not found on payment page.")
+
+        # ------------------------------------------------------------------
+        # 4. Get UPI ID from credentials
+        # ------------------------------------------------------------------
+        upi_id = creds.get("upi_id", "")
+        if not upi_id:
+            raise MissingUPIID()
+        logger.info("[payment-upi] UPI ID: %s", upi_id)
+
+        # ------------------------------------------------------------------
+        # 5. Fill UPI ID and click Verify / Proceed
+        # ------------------------------------------------------------------
+        upi_input_selectors = [
+            "input[placeholder*='upi' i]",
+            "input[placeholder*='vpa' i]",
+            "input[placeholder*='UPI ID' i]",
+            "input[id*='upi' i]",
+            "input[id*='vpa' i]",
+            "input[name*='upi' i]",
+            "input[name*='vpa' i]",
+            "[data-testid='upi-input']",
+            "[data-testid='vpa-input']",
+            ".upi-input input",
+            "#vpaInput",
+            "#upiInput",
+        ]
+        upi_field = None
+        for sel in upi_input_selectors:
+            try:
+                upi_field = await page.wait_for_selector(sel, timeout=5000)
+                if upi_field and await upi_field.is_visible():
+                    logger.debug("[payment-upi] Found UPI input: %s", sel)
+                    break
+                upi_field = None
+            except Exception:
+                continue
+
+        if upi_field is None:
+            # Fallback: first visible text input after selecting UPI
+            try:
+                all_inputs = await page.query_selector_all(
+                    "input[type='text'], input:not([type])"
+                )
+                for inp in all_inputs:
+                    if await inp.is_visible():
+                        upi_field = inp
+                        logger.debug("[payment-upi] Using first visible text input as UPI field.")
+                        break
+            except Exception:
+                pass
+
+        if upi_field is None:
+            raise BMSAutomationError(
+                "Could not find the UPI ID input field on the payment page."
+            )
+
+        await upi_field.click()
+        await page.wait_for_timeout(200)
+        await upi_field.fill("")
+        await upi_field.type(upi_id, delay=60)
+        logger.info("[payment-upi] UPI ID entered: %s", upi_id)
+
+        # Click Verify / Proceed / Continue
+        verify_selectors = [
+            "button:has-text('Verify')",
+            "button:has-text('Proceed')",
+            "button:has-text('Continue')",
+            "button:has-text('Pay Now')",
+            "button:has-text('Pay ₹')",
+            "[data-testid='verify-upi-btn']",
+            "[data-testid='proceed-btn']",
+            ".verify-btn",
+            "#verifyBtn",
+        ]
+        verify_clicked = False
+        for sel in verify_selectors:
+            try:
+                btn = await page.query_selector(sel)
+                if btn and await btn.is_visible():
+                    logger.info("[payment-upi] Clicking: %s", sel)
+                    await btn.click()
+                    await page.wait_for_timeout(2000)
+                    verify_clicked = True
+                    break
+            except Exception:
+                continue
+
+        if not verify_clicked:
+            logger.info("[payment-upi] No Verify button found — pressing Enter on UPI field.")
+            await upi_field.press("Enter")
+            await page.wait_for_timeout(2000)
+
+        logger.info("[payment-upi] ⏳ UPI payment initiated — approve on your phone now.")
+
+        # ------------------------------------------------------------------
+        # 5b. Dry‑run — stop after triggering UPI push
+        # ------------------------------------------------------------------
+        if dry_run:
+            logger.info(
+                "[payment-upi] 🔍 DRY RUN — would wait for phone approval. "
+                "Stopping now."
+            )
+            os.makedirs("screenshots", exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dryrun_path = f"screenshots/dryrun_upi_{timestamp}.png"
+            try:
+                await page.screenshot(path=dryrun_path, full_page=True)
+                logger.info("[payment-upi] Dry‑run screenshot saved: %s", dryrun_path)
+            except Exception as exc:
+                logger.warning("[payment-upi] Could not save dry‑run screenshot: %s", exc)
+                dryrun_path = ""
+            return {
+                "success": False,
+                "dry_run": True,
+                "booking_id": None,
+                "cinema": None,
+                "show_time": None,
+                "seats": None,
+                "total_paid": None,
+                "screenshot": dryrun_path or None,
+            }
+
+        # ------------------------------------------------------------------
+        # 6. Poll for confirmation (max 120 s, every 2 s)
+        # ------------------------------------------------------------------
+        logger.info("[payment-upi] Waiting up to 120 s for phone approval …")
+        max_wait = 120
+        poll_interval = 2
+        elapsed = 0
+
+        success_selectors = [
+            "[data-testid='booking-confirmation']",
+            ".booking-confirmation",
+            ".confirmation-page",
+            ".success-page",
+            "[class*='confirmation']",
+            "[class*='success']",
+            "text=/booking confirmed/i",
+            "text=/booking successful/i",
+            "text=/thank you/i",
+            "text=/payment successful/i",
+            "text=/transaction successful/i",
+        ]
+
+        while elapsed < max_wait:
+            await page.wait_for_timeout(poll_interval * 1000)
+            elapsed += poll_interval
+
+            # Check for success
+            for sel in success_selectors:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        logger.info(
+                            "[payment-upi] Confirmation page detected via '%s' "
+                            "after %d s.", sel, elapsed,
+                        )
+                        found = True
+                        break
+                except Exception:
+                    continue
+            else:
+                # Also check URL for confirmation keywords.
+                current_url = page.url
+                if any(kw in current_url.lower() for kw in (
+                    "confirmation", "booking", "success", "thankyou", "receipt",
+                )):
+                    logger.info(
+                        "[payment-upi] URL suggests confirmation after %d s: %s",
+                        elapsed, current_url,
+                    )
+                else:
+                    if elapsed % 10 == 0:
+                        logger.info(
+                            "[payment-upi] Still waiting … %d s elapsed.", elapsed,
+                        )
+                    continue
+            break  # success found
+        else:
+            # Timed out — take screenshot and raise
+            os.makedirs("screenshots", exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timeout_path = f"screenshots/upi_timeout_{ts}.png"
+            try:
+                await page.screenshot(path=timeout_path, full_page=True)
+                logger.info("[payment-upi] Timeout screenshot saved: %s", timeout_path)
+            except Exception as exc:
+                logger.warning("[payment-upi] Could not save timeout screenshot: %s", exc)
+            raise PaymentTimeout()
+
+        # ------------------------------------------------------------------
+        # 7. Extract booking details
+        # ------------------------------------------------------------------
+        logger.info("[payment-upi] Confirmation received — extracting details …")
+
+        body_text = ""
+        try:
+            body_text = await page.inner_text("body")
+        except Exception:
+            pass
+
+        booking_id: Optional[str] = None
+        booking_id_patterns = [
+            r"(?:booking\s*(?:id|ref|no|number)[:\s#]*)([A-Z0-9]{4,20})",
+            r"(?:transaction\s*(?:id|ref|no)[:\s#]*)([A-Z0-9]{4,20})",
+            r"(?:order\s*(?:id|no)[:\s#]*)([A-Z0-9]{4,20})",
+            r"([A-Z]{2}\d{6,})",
+            r"(\d{10,})",
+        ]
+        for pattern in booking_id_patterns:
+            match = re.search(pattern, body_text, re.IGNORECASE)
+            if match:
+                booking_id = match.group(1)
+                logger.info("[payment-upi] Extracted booking ID: %s", booking_id)
+                break
+
+        if not booking_id:
+            fallback_id = f"BMS_UPI_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            logger.warning(
+                "[payment-upi] Could not parse booking ID — "
+                "using fallback: %s", fallback_id,
+            )
+            booking_id = fallback_id
+
+        # Extract other details.
+        cinema: Optional[str] = None
+        show_time: Optional[str] = None
+        seats: Optional[str] = None
+        total_paid: Optional[str] = None
+
+        cinema_match = re.search(
+            r"(?:cinema|venue|theatre)[:\s]*(.+)", body_text, re.IGNORECASE,
+        )
+        if cinema_match:
+            cinema = cinema_match.group(1).strip().split("\n")[0]
+
+        time_match = re.search(
+            r"(?:show\s*time|timing|time)[:\s]*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)",
+            body_text, re.IGNORECASE,
+        )
+        if time_match:
+            show_time = time_match.group(1).strip()
+
+        seat_match = re.search(
+            r"(?:seats?|seat\s*nos?)[:\s]*([A-Z]+\d+(?:\s*,\s*[A-Z]+\d+)*)",
+            body_text, re.IGNORECASE,
+        )
+        if seat_match:
+            seats = seat_match.group(1).strip()
+
+        amount_match = re.search(
+            r"(?:total|paid|amount|₹)\s*₹?\s*([\d,]+(?:\.\d{1,2})?)",
+            body_text, re.IGNORECASE,
+        )
+        if amount_match:
+            total_paid = f"₹{amount_match.group(1).strip()}"
+
+        # Screenshot
+        os.makedirs("screenshots", exist_ok=True)
+        safe_id = (booking_id or "unknown").replace("/", "_").replace(" ", "_")
+        screenshot_path = f"screenshots/booking_confirm_UPI_{safe_id}.png"
+        try:
+            await page.screenshot(path=screenshot_path, full_page=True)
+            logger.info("[payment-upi] Confirmation screenshot saved: %s", screenshot_path)
+        except Exception as exc:
+            logger.warning("[payment-upi] Could not save screenshot: %s", exc)
+            screenshot_path = ""
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "booking_id": booking_id,
+            "cinema": cinema,
+            "show_time": show_time,
+            "seats": seats,
+            "total_paid": total_paid,
+            "screenshot": screenshot_path or None,
+        }
+        logger.info("[payment-upi] ✅ UPI payment complete — booking_id=%s", booking_id)
         return result
-
 
 # ---------------------------------------------------------------------------
 # Self-test / CLI helper
@@ -2746,21 +3206,25 @@ async def _self_test() -> None:
     print(f"  City:          {bms.city}")
     print(f"  Headless:      {bms.headless}")
     print(f"  User-Agent:    {bms._pick_user_agent()}")
-    print(f"  Browser data:  {bms.user_data_dir}")
     print("=" * 60)
 
     browser = None
     try:
         browser, context, page = await bms.start()
         print(f"✅ Browser launched. Page title: {await page.title()}")
+        print("ℹ️  No login required — BMS asks for email/phone at payment stage.")
 
+        # Check if contact details and gift card credentials are present
         try:
-            logged_in = await bms.login(page)
-            print(f"{'✅' if logged_in else '❌'} Login: {'success' if logged_in else 'failed'}")
-        except LoginRequired as exc:
-            print(f"🔐 Login: OTP required — {exc}")
+            creds = bms._load_credentials()
+            user = creds.get("user_details", {})
+            if user.get("email") and user.get("phone"):
+                print(f"📧 Contact: {user['email']} / {user['phone']}")
+            else:
+                print("⚠️  Contact details NOT SET — run: python setup_creds.py")
+        except Exception:
+            pass
 
-        # Check if gift card credentials are present
         try:
             creds = bms._load_credentials()
             gc = creds.get("gift_card")
@@ -2771,10 +3235,10 @@ async def _self_test() -> None:
                 print("⚠️  Gift Card: NOT SET — complete_payment() will fail.")
                 if creds.get("wallet_pin") or creds.get("walletpin"):
                     print("     ⚠️  Legacy wallet_pin detected — please re‑run:")
-                    print("        python booking_cli.py setup-credentials")
+                    print("        python setup_creds.py")
                     print("     to store gift card details instead.")
                 else:
-                    print("     Run: python booking_cli.py setup-credentials")
+                    print("     Run: python setup_creds.py")
         except Exception as exc:
             print(f"⚠️  Could not check gift card credentials: {exc}")
 

@@ -1,0 +1,161 @@
+2026-07-03 14:34:45 [INFO] book_ticket: Selected 1 booking request(s).
+2026-07-03 14:34:45 [INFO] book_ticket:   [req_001] Coolie — 2025-08-15 (PVR Brookfields, INOX Prozone)
+2026-07-03 14:34:45 [INFO] book_ticket: 🚀 Triggering booking for request req_001 …
+2026-07-03 14:34:45 [INFO] booking_engine: Launching browser for request req_001 …
+2026-07-03 14:34:45 [INFO] bms_playwright: Starting Playwright-based BMS automator …
+2026-07-03 14:34:45 [ERROR] booking_engine: Automation error for request req_001: Playwright is not installed. Run:
+    pip install playwright
+    playwright install chromium
+
+2026-07-03 14:34:45 [INFO] book_ticket: ============================================================
+2026-07-03 14:34:45 [INFO] book_ticket: BOOKING SUMMARY
+2026-07-03 14:34:45 [INFO] book_ticket: ============================================================
+2026-07-03 14:34:45 [INFO] book_ticket:   [req_001] Coolie — ❌ FAILED — Playwright is not installed. Run:
+    pip install playwright
+    playwright install chromium
+
+2026-07-03 14:34:45 [INFO] book_ticket: ============================================================
+2026-07-03 14:39:35 [INFO] book_ticket: Selected 1 booking request(s).
+2026-07-03 14:39:35 [INFO] book_ticket:   [req_001] Coolie — 2025-08-15 (PVR Brookfields, INOX Prozone)
+2026-07-03 14:39:35 [INFO] book_ticket: 🔍 DRY‑RUN MODE — no real payments will be made.
+2026-07-03 14:39:35 [INFO] book_ticket: 🚀 Triggering booking for request req_001 …
+2026-07-03 14:39:35 [INFO] booking_engine: Launching browser for request req_001 …
+2026-07-03 14:39:35 [INFO] bms_playwright: Starting Playwright-based BMS automator …
+2026-07-03 14:39:35 [ERROR] booking_engine: Automation error for request req_001: Playwright is not installed. Run:
+    pip install playwright
+    playwright install chromium
+
+2026-07-03 14:39:35 [INFO] book_ticket: ============================================================
+2026-07-03 14:39:35 [INFO] book_ticket: BOOKING SUMMARY
+2026-07-03 14:39:35 [INFO] book_ticket: ============================================================
+2026-07-03 14:39:35 [INFO] book_ticket:   [req_001] Coolie — 🔍 DRY‑RUN — Playwright is not installed. Run:
+    pip install playwright
+    playwright install chromium
+
+2026-07-03 14:39:35 [INFO] book_ticket: ============================================================
+2026-07-03 14:41:22 [INFO] book_ticket: Selected 1 booking request(s).
+2026-07-03 14:41:22 [INFO] book_ticket:   [req_001] Coolie — 2025-08-15 (PVR Brookfields, INOX Prozone)
+2026-07-03 14:41:22 [INFO] book_ticket: 🔍 DRY‑RUN MODE — no real payments will be made.
+2026-07-03 14:41:22 [INFO] book_ticket: 🚀 Triggering booking for request req_001 …
+2026-07-03 14:41:22 [INFO] booking_engine: Launching browser for request req_001 …
+2026-07-03 14:41:22 [INFO] bms_playwright: Starting Playwright-based BMS automator …
+2026-07-03 14:41:22 [WARNING] bms_playwright: playwright-stealth not installed. Bot detection evasion will be weaker. Install it with:  pip install playwright-stealth
+2026-07-03 14:41:27 [INFO] bms_playwright: Launching persistent Chromium (headless=False, user_data_dir=/Users/shantharam/Documents/GitHub/bmsEmailAlerts/browser_data)
+2026-07-03 14:41:27 [ERROR] booking_engine: Unexpected error during booking for request req_001.
+Traceback (most recent call last):
+  File "/Users/shantharam/Documents/GitHub/bmsEmailAlerts/booking_engine.py", line 495, in execute_booking
+    browser, context, page = await automator.start()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/shantharam/Documents/GitHub/bmsEmailAlerts/bms_playwright.py", line 359, in start
+    self._context = await self._playwright.chromium.launch_persistent_context(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<13 lines>...
+    )
+    ^
+  File "/Users/shantharam/Documents/GitHub/bmsEmailAlerts/.venv/lib/python3.13/site-packages/playwright/async_api/_generated.py", line 16845, in launch_persistent_context
+    await self._impl_obj.launch_persistent_context(
+    ...<51 lines>...
+    )
+  File "/Users/shantharam/Documents/GitHub/bmsEmailAlerts/.venv/lib/python3.13/site-packages/playwright/_impl/_browser_type.py", line 165, in launch_persistent_context
+    result = await self._channel.send_return_as_dict(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "launchPersistentContext", TimeoutSettings.launch_timeout, params
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/shantharam/Documents/GitHub/bmsEmailAlerts/.venv/lib/python3.13/site-packages/playwright/_impl/_connection.py", line 83, in send_return_as_dict
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/Users/shantharam/Documents/GitHub/bmsEmailAlerts/.venv/lib/python3.13/site-packages/playwright/_impl/_connection.py", line 563, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: BrowserType.launch_persistent_context: Executable doesn't exist at /Users/shantharam/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     playwright install                                     ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+2026-07-03 14:41:27 [INFO] book_ticket: ============================================================
+2026-07-03 14:41:27 [INFO] book_ticket: BOOKING SUMMARY
+2026-07-03 14:41:27 [INFO] book_ticket: ============================================================
+2026-07-03 14:41:27 [INFO] book_ticket:   [req_001] Coolie — 🔍 DRY‑RUN — Unexpected error: BrowserType.launch_persistent_context: Executable doesn't exist at /Users/shantharam/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     playwright install                                     ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+2026-07-03 14:41:27 [INFO] book_ticket: ============================================================
+2026-07-03 14:55:55 [INFO] book_ticket: Selected 1 booking request(s).
+2026-07-03 14:55:55 [INFO] book_ticket:   [req_001] Coolie — 2025-08-15 (PVR Brookfields, INOX Prozone)
+2026-07-03 14:55:55 [INFO] book_ticket: 🔍 DRY‑RUN MODE — no real payments will be made.
+2026-07-03 14:55:55 [WARNING] book_ticket: ⚠️  No credentials found.  Email notifications and auto‑payment will not work.
+2026-07-03 14:55:55 [WARNING] book_ticket:     Run once:  python setup_creds.py
+2026-07-03 14:55:55 [INFO] book_ticket: 🚀 Triggering booking for request req_001 …
+2026-07-03 14:55:55 [WARNING] booking_engine: ⚠️  No credentials found — email notifications and auto‑payment will not work. Run:  python setup_creds.py
+2026-07-03 14:55:55 [INFO] booking_engine: Launching browser for request req_001 …
+2026-07-03 14:55:55 [INFO] bms_playwright: Starting Playwright-based BMS automator …
+2026-07-03 14:55:55 [WARNING] bms_playwright: playwright-stealth not installed. Bot detection evasion will be weaker. Install it with:  pip install playwright-stealth
+2026-07-03 14:55:55 [INFO] bms_playwright: Launching persistent Chromium (headless=False, user_data_dir=/Users/shantharam/Documents/GitHub/bmsEmailAlerts/browser_data)
+2026-07-03 14:55:58 [INFO] bms_playwright: Browser ready.  Page title: 
+2026-07-03 14:55:58 [INFO] booking_engine: ✅ Browser ready for request req_001.
+2026-07-03 14:55:58 [INFO] bms_playwright: Checking login state …
+2026-07-03 14:56:03 [INFO] bms_playwright: Not logged in.  Starting email-based login flow …
+2026-07-03 14:58:32 [INFO] book_ticket: Selected 1 booking request(s).
+2026-07-03 14:58:32 [INFO] book_ticket:   [req_001] Coolie — 2025-08-15 (PVR Brookfields, INOX Prozone)
+2026-07-03 14:58:32 [INFO] book_ticket: 🔍 DRY‑RUN MODE — no real payments will be made.
+2026-07-03 14:58:32 [WARNING] book_ticket: ⚠️  No credentials found.  Email notifications and auto‑payment will not work.
+2026-07-03 14:58:32 [WARNING] book_ticket:     Run once:  python setup_creds.py
+2026-07-03 14:58:32 [INFO] book_ticket: 🚀 Triggering booking for request req_001 …
+2026-07-03 14:58:32 [WARNING] booking_engine: ⚠️  No credentials found — email notifications and auto‑payment will not work. Run:  python setup_creds.py
+2026-07-03 14:58:32 [INFO] booking_engine: Launching browser for request req_001 …
+2026-07-03 14:58:32 [INFO] bms_playwright: Starting Playwright-based BMS automator …
+2026-07-03 14:58:32 [INFO] bms_playwright: playwright-stealth loaded — evasion enabled.
+2026-07-03 14:58:32 [INFO] bms_playwright: Launching persistent Chromium (headless=False, user_data_dir=/Users/shantharam/Documents/GitHub/bmsEmailAlerts/browser_data)
+2026-07-03 14:58:32 [INFO] bms_playwright: Browser ready.  Page title: 
+2026-07-03 14:58:32 [INFO] booking_engine: ✅ Browser ready for request req_001.
+2026-07-03 14:58:32 [INFO] bms_playwright: Checking login state …
+2026-07-03 14:58:46 [INFO] bms_playwright: Not logged in.  Starting email-based login flow …
+2026-07-03 14:58:49 [INFO] bms_playwright: Clicking sign-in element: text=/Sign ?In/i
+2026-07-03 14:58:51 [ERROR] booking_engine: Automation error for request req_001: No credentials found. Run 'python booking_cli.py setup-credentials' first.
+2026-07-03 14:58:51 [INFO] booking_engine: 🛑 Browser closed for request req_001.
+2026-07-03 14:58:51 [INFO] book_ticket: ============================================================
+2026-07-03 14:58:51 [INFO] book_ticket: BOOKING SUMMARY
+2026-07-03 14:58:51 [INFO] book_ticket: ============================================================
+2026-07-03 14:58:51 [INFO] book_ticket:   [req_001] Coolie — 🔍 DRY‑RUN — No credentials found. Run 'python booking_cli.py setup-credentials' first.
+2026-07-03 14:58:51 [INFO] book_ticket: ============================================================
+2026-07-03 20:03:50 [INFO] book_ticket: Selected 1 booking request(s).
+2026-07-03 20:03:50 [INFO] book_ticket:   [req_001] Coolie — 2025-08-15 (PVR Brookfields, INOX Prozone)
+2026-07-03 20:03:50 [INFO] book_ticket: 🔍 DRY‑RUN MODE — no real payments will be made.
+2026-07-03 20:03:50 [INFO] book_ticket: 🚀 Triggering booking for request req_001 …
+2026-07-03 20:03:50 [INFO] booking_engine: Launching browser for request req_001 …
+2026-07-03 20:03:50 [INFO] bms_playwright: Starting Playwright-based BMS automator …
+2026-07-03 20:03:50 [INFO] bms_playwright: playwright-stealth loaded — evasion enabled.
+2026-07-03 20:03:51 [INFO] bms_playwright: Launching Chromium (headless=False)
+2026-07-03 20:03:52 [INFO] bms_playwright: Browser ready.  Page title: 
+2026-07-03 20:03:52 [INFO] booking_engine: ✅ Browser ready for request req_001.
+2026-07-03 20:03:52 [INFO] booking_engine: ============================================================
+2026-07-03 20:03:52 [INFO] booking_engine: [req:req_001] Processing: Coolie on 2025-08-15
+2026-07-03 20:03:52 [INFO] booking_engine: [req:req_001] Cinemas: ['PVR Brookfields', 'INOX Prozone']  Tickets: 2  Dry‑run: True  Payment: upi
+2026-07-03 20:03:52 [INFO] booking_engine: ============================================================
+2026-07-03 20:03:52 [INFO] booking_engine: [req:req_001] Time window: 18:00–22:00
+2026-07-03 20:03:52 [INFO] bms_playwright: [search] Looking for 'Coolie' in Coimbatore on 2025-08-15, time window 18:00–22:00
+2026-07-03 20:03:59 [INFO] bms_playwright: No suggestion found; submitting search via Enter.
+2026-07-03 20:04:02 [INFO] bms_playwright: Clicking book button.
+2026-07-03 20:04:20 [INFO] bms_playwright: Selecting date: 2025-08-15
+2026-07-03 20:04:20 [ERROR] booking_engine: [req:req_001] find_shows failed: Page.wait_for_timeout: Target page, context or browser has been closed
+2026-07-03 20:06:35 [ERROR] booking_engine: Failed to send email to shanthu2005@gmail.com: (535, b'5.7.8 Username and Password not accepted. For more information, go to\n5.7.8  https://support.google.com/mail/?p=BadCredentials 5a478bee46e88-30f0b4c5577sm24127751eec.0 - gsmtp')
+2026-07-03 20:13:48 [ERROR] booking_engine: Failed to send email to tejeshwarcdr@gmail.com: (535, b'5.7.8 Username and Password not accepted. For more information, go to\n5.7.8  https://support.google.com/mail/?p=BadCredentials a92af1059eb24-13b3c85b345sm32533787c88.10 - gsmtp')
+2026-07-03 20:13:48 [INFO] booking_engine: 🛑 Browser closed for request req_001.
+2026-07-03 20:13:48 [INFO] book_ticket: ============================================================
+2026-07-03 20:13:48 [INFO] book_ticket: BOOKING SUMMARY
+2026-07-03 20:13:48 [INFO] book_ticket: ============================================================
+2026-07-03 20:13:48 [INFO] book_ticket:   [req_001] Coolie — 🔍 DRY‑RUN — Page.wait_for_timeout: Target page, context or browser has been closed
+2026-07-03 20:13:48 [INFO] book_ticket: ============================================================
