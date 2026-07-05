@@ -21,6 +21,7 @@ import os
 import re
 import smtplib
 from datetime import datetime
+from difflib import SequenceMatcher
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -41,6 +42,37 @@ from bms_playwright import (
 from credential_manager import SecureCredentialManager
 
 logger = logging.getLogger("booking_engine")
+
+
+def _normalize_cinema_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(name).lower()).strip()
+
+
+def _cinema_names_match(requested: str, scraped: str) -> bool:
+    requested_norm = _normalize_cinema_name(requested)
+    scraped_norm = _normalize_cinema_name(scraped)
+
+    if not requested_norm or not scraped_norm:
+        return False
+
+    if requested_norm in scraped_norm or scraped_norm in requested_norm:
+        return True
+
+    requested_tokens = [token for token in requested_norm.split() if len(token) > 2]
+    scraped_tokens = [token for token in scraped_norm.split() if len(token) > 2]
+
+    if requested_tokens and all(token in scraped_norm for token in requested_tokens):
+        return True
+
+    chain_tokens = {"pvr", "inox", "cinepolis", "miraj", "broadway", "kg"}
+    if any(token in chain_tokens for token in requested_tokens) and any(token in chain_tokens for token in scraped_tokens):
+        requested_tail = " ".join(token for token in requested_tokens if token not in chain_tokens)
+        scraped_tail = " ".join(token for token in scraped_tokens if token not in chain_tokens)
+        if requested_tail and scraped_tail:
+            if SequenceMatcher(None, requested_tail, scraped_tail).ratio() >= 0.55:
+                return True
+
+    return SequenceMatcher(None, requested_norm, scraped_norm).ratio() >= 0.72
 
 # ---------------------------------------------------------------------------
 # Config paths
@@ -211,6 +243,27 @@ def send_notification(
                 smtp.send_message(msg)
                 logger.info("✅ Email sent to %s", recipient)
                 sent_any = True
+        except smtplib.SMTPAuthenticationError:
+            logger.error(
+                "❌ Gmail authentication failed for %s. "
+                "This usually means the stored password is your regular "
+                "Gmail password, not a Gmail App Password.\n"
+                "Fix:\n"
+                "  1. Go to https://myaccount.google.com/apppasswords\n"
+                "  2. Generate an App Password for 'Mail'\n"
+                "  3. Run:  python setup_creds.py\n"
+                "  4. Enter the 16-character App Password (not your regular "
+                "Gmail password) when prompted for the 'Email App Password'.",
+                sender_email,
+            )
+        except smtplib.SMTPException as exc:
+            logger.error(
+                "Failed to send email to %s: SMTP error — %s\n"
+                "If the error is about authentication, ensure you are using "
+                "a Gmail App Password, not your regular Gmail password.\n"
+                "Generate one at: https://myaccount.google.com/apppasswords",
+                recipient, exc,
+            )
         except Exception as exc:
             logger.error("Failed to send email to %s: %s", recipient, exc)
 
@@ -321,6 +374,59 @@ async def _process_request(
     # --- Sort shows by time -----------------------------------------------
     shows = sort_shows_by_time(shows)
 
+    # --- Filter by requested cinemas before attempting seats --------------
+    if cinemas:
+        requested = [c.strip().lower() for c in cinemas if c and c.strip()]
+
+        def _matches_requested_cinema(show: Dict[str, Any]) -> bool:
+            venue = str(show.get("venue") or show.get("cinema") or "").strip()
+            return any(_cinema_names_match(name, venue) for name in requested)
+
+        # Log which shows match and which are skipped.
+        matching_shows = []
+        skipped_cinemas: set[str] = set()
+        for show in shows:
+            venue = str(show.get("venue") or show.get("cinema") or "")
+            if _matches_requested_cinema(show):
+                matching_shows.append(show)
+            else:
+                skipped_cinemas.add(venue)
+
+        if skipped_cinemas:
+            for cinema in sorted(skipped_cinemas):
+                logger.info(
+                    '[req:%s] Skipping "%s" — not in preferred cinemas %s',
+                    req_id, cinema, cinemas,
+                )
+
+        if matching_shows:
+            logger.info(
+                "[req:%s] After cinema filter: %d show(s) matching %s (from %d total)",
+                req_id, len(matching_shows), cinemas, len(shows),
+            )
+            shows = matching_shows
+        else:
+            # No fallback — if no shows match the configured cinemas, we fail early.
+            error_msg = (
+                f"No shows matched requested cinemas {cinemas}. "
+                f"Found {len(shows)} show(s) at: "
+                + ", ".join(sorted(skipped_cinemas)[:5])
+            )
+            logger.error("[req:%s] %s", req_id, error_msg)
+            return {
+                "request_id": req_id,
+                "movie_name": movie_name,
+                "success": False,
+                "booking_id": None,
+                "cinema": None,
+                "show_time": None,
+                "seats": None,
+                "total_paid": None,
+                "screenshot": None,
+                "error": error_msg,
+                "dry_run": dry_run,
+            }
+
     # --- Try each show ----------------------------------------------------
     for idx, show in enumerate(shows):
         venue = show.get("venue", "?")
@@ -333,7 +439,10 @@ async def _process_request(
         # -- Select seats --
         try:
             seats_result = await automator.select_best_seats(
-                page, show, num_tickets=num_tickets,
+                page,
+                show,
+                num_tickets=num_tickets,
+                time_range=time_range,
             )
         except Exception as exc:
             logger.warning(

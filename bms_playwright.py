@@ -142,6 +142,29 @@ _BOOKING_URL_RE = re.compile(
     r"(?:/.*)?$"                 # optional trailing path/query
 )
 
+# Movie page URL patterns before the buytickets page is opened.
+# Supports both:
+#   https://in.bookmyshow.com/{city}/movies/{movie-slug}/{ET...}
+#   https://in.bookmyshow.com/movies/{city}/{movie-slug}/{ET...}
+_MOVIE_PAGE_URL_RES = [
+    re.compile(
+        r"https?://in\.bookmyshow\.com"
+        r"/(?P<city>[^/]+)"
+        r"/movies/"
+        r"(?P<movie_slug>[^/]+)"
+        r"/(?P<unique_code>ET\d+)"
+        r"(?:/.*)?$"
+    ),
+    re.compile(
+        r"https?://in\.bookmyshow\.com"
+        r"/movies/"
+        r"(?P<city>[^/]+)"
+        r"/(?P<movie_slug>[^/]+)"
+        r"/(?P<unique_code>ET\d+)"
+        r"(?:/.*)?$"
+    ),
+]
+
 # How long to wait (seconds) for elements before giving up.
 _DEFAULT_TIMEOUT = 15_000  # ms
 _NAVIGATION_TIMEOUT = 30_000  # ms
@@ -198,6 +221,23 @@ def parse_booking_url(url: str) -> Optional[Dict[str, str]]:
         "movie_slug": match.group("movie_slug"),
         "unique_code": match.group("unique_code"),
         "date": match.group("date"),
+    }
+
+
+def parse_movie_page_url(url: str) -> Optional[Dict[str, str]]:
+    """Parse a BMS movie page URL that includes the ET unique code."""
+    match = None
+    for pattern in _MOVIE_PAGE_URL_RES:
+        match = pattern.match(url)
+        if match:
+            break
+    if not match:
+        logger.debug("URL does not match BMS movie-page pattern: %s", url)
+        return None
+    return {
+        "city": match.group("city"),
+        "movie_slug": match.group("movie_slug"),
+        "unique_code": match.group("unique_code"),
     }
 
 
@@ -474,7 +514,7 @@ class BMSPlaywrightAutomator:
         # --- Direct-URL mode -------------------------------------------------
         if booking_url:
             shows = await self._find_shows_from_url(
-                page, movie_name, date, start_hour, end_hour, booking_url,
+                page, booking_url, date, time_range,
             )
             if cinema_filter:
                 shows = _apply_cinema_filter(shows, cinema_filter)
@@ -495,109 +535,98 @@ class BMSPlaywrightAutomator:
         await page.goto(search_url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
         await page.wait_for_timeout(2000)
 
-        # Dismiss any popups / location prompts.
-        await self._dismiss_overlays(page)
-
-        # Locate and fill the search box.
-        search_selectors = [
-            "input[placeholder*='Search' i]",
-            "input[placeholder*='search' i]",
-            "[data-testid='search-input']",
-            "input[type='text']",
-            ".search-input input",
-            "#search-input",
-        ]
-        search_box = None
-        for sel in search_selectors:
-            try:
-                search_box = await page.wait_for_selector(sel, timeout=3000)
-                if search_box:
-                    if await search_box.is_visible():
-                        logger.debug("Found search box: %s", sel)
-                        break
-                    search_box = None
-            except Exception:
-                continue
-
-        if search_box is None:
-            logger.warning("Search box not found; trying direct URL navigation.")
-            return await self._find_shows_direct(page, movie_name, date, time_range)
-
-        await search_box.click()
-        await page.wait_for_timeout(300)
-        await search_box.fill("")
-        await search_box.type(movie_name, delay=80)
+        # Handle the BMS region/city selection popup first.
+        await self._handle_region_popup(page, city=self.city)
         await page.wait_for_timeout(1500)
 
-        # Click the first suggestion that matches the movie name.
+        home_url = f"{BMS_BASE_URL}/explore/home/{city_slug}"
+        if page.url != home_url:
+            logger.info("[search] Navigating to city home page: %s", home_url)
+            await page.goto(home_url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
+            await page.wait_for_timeout(10000)
+
+        async def _find_visible(selector_list: List[str]) -> Optional[Tuple[str, Any]]:
+            for selector in selector_list:
+                try:
+                    matches = await page.query_selector_all(selector)
+                    for match in matches:
+                        if match and await match.is_visible():
+                            return selector, match
+                except Exception:
+                    continue
+        shell_selectors = [
+            "span:has-text(\"Search for Movies\")",
+            "[class*='search'][class*='ellipsis']",
+            "[data-testid='search-trigger']",
+            "[class*='search-icon']",
+        ]
+        shell = await _find_visible(shell_selectors)
+        if shell is None:
+            raise RuntimeError("Search shell did not appear on the city home page")
+        logger.info("Clicked search shell.")
+        await shell[1].click(force=True)
+
+        input_selectors = [
+            "input[type='text']",
+            "input[type='search']",
+            "input[placeholder*='Search']",
+            "input[class*='search']",
+        ]
+        movie_input = None
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while asyncio.get_running_loop().time() < deadline and movie_input is None:
+            movie_input = await _find_visible(input_selectors)
+            if movie_input is None:
+                await page.wait_for_timeout(250)
+        if movie_input is None:
+            raise RuntimeError("Search input did not appear after clicking shell")
+        logger.info("Search input appeared.")
+        movie_box = movie_input[1]
+        await movie_box.click()
+        await movie_box.fill("")
+        await movie_box.type(movie_name, delay=80)
+        await page.wait_for_timeout(1000)
+
         suggestion_selectors = [
-            "[data-testid='search-suggestion']",
-            ".search-suggestion",
-            ".sc-gJqSRn",
-            "li[role='option']",
-            "ul[class*='search'] li",
-            "div[class*='suggestion']",
+            f"li:has-text('{movie_name}')",
+            f"[class*='suggestion']:has-text('{movie_name}')",
+            f"[class*='result']:has-text('{movie_name}')",
+            f"a:has-text('{movie_name}')",
         ]
-        clicked_suggestion = False
-        for sel in suggestion_selectors:
-            try:
-                items = await page.query_selector_all(sel)
-                for item in items:
-                    text = (await item.inner_text()).strip().lower()
-                    if movie_name.lower() in text:
-                        logger.info("Clicking suggestion: %s", text[:80])
-                        await item.click()
-                        await page.wait_for_timeout(3000)
-                        clicked_suggestion = True
-                        break
-                if clicked_suggestion:
-                    break
-            except Exception:
-                continue
+        suggestion = None
+        deadline = asyncio.get_running_loop().time() + 3.0
+        while asyncio.get_running_loop().time() < deadline and suggestion is None:
+            suggestion = await _find_visible(suggestion_selectors)
+            if suggestion is None:
+                await page.wait_for_timeout(250)
+        if suggestion is None:
+            raise RuntimeError(f"No search suggestion found for '{movie_name}'")
+        await suggestion[1].click(force=True)
+        logger.info("Clicked suggestion for '%s'.", movie_name)
 
-        if not clicked_suggestion:
-            logger.info("No suggestion found; submitting search via Enter.")
-            await search_box.press("Enter")
-            await page.wait_for_timeout(3000)
+        suggestion_href = await suggestion[1].get_attribute("href")
+        if not suggestion_href:
+            raise RuntimeError(f"Clicked suggestion for '{movie_name}' did not expose an href")
+        current_url = suggestion_href if suggestion_href.startswith("http") else f"{BMS_BASE_URL}{suggestion_href}"
+        movie_page_parsed = parse_movie_page_url(current_url) or parse_booking_url(current_url)
+        if movie_page_parsed is None:
+            raise RuntimeError(f"Could not extract movie code from URL: {current_url}")
+        movie_code = movie_page_parsed["unique_code"]
+        movie_slug = movie_page_parsed["movie_slug"]
+        requested_slug = _slugify(movie_name)
+        if movie_slug != requested_slug:
+            raise RuntimeError(
+                f"Landing page movie slug '{movie_slug}' does not match requested movie '{movie_name}'"
+            )
+        logger.info("Extracted movie code: %s.", movie_code)
 
-        # --- Step 2: capture unique code from the current URL ---------------
-        self._log_parsed_url(page.url)
-
-        # --- Step 3: navigate to the movie's booking page ------------------
-        book_selectors = [
-            "a:has-text('Book')",
-            "button:has-text('Book')",
-            "[data-testid='book-btn']",
-            "a:has-text('Book Tickets')",
-            "text=/Book Tickets/i",
-        ]
-        for sel in book_selectors:
-            try:
-                btn = await page.wait_for_selector(sel, timeout=3000)
-                if btn:
-                    logger.info("Clicking book button.")
-                    await btn.click()
-                    await page.wait_for_timeout(3000)
-                    break
-            except Exception:
-                continue
-
-        # Re-check URL after navigation to booking page.
-        self._log_parsed_url(page.url)
-
-        # --- Step 4: select date -------------------------------------------
-        await self._select_date(page, date)
-
-        # --- Step 5: scrape showtimes --------------------------------------
-        shows = await self._scrape_shows(page, start_hour, end_hour)
-        # Attach unique code if the current URL has one.
-        parsed = parse_booking_url(page.url)
-        if parsed:
-            for s in shows:
-                s.setdefault("_unique_code", parsed["unique_code"])
-        if cinema_filter:
-            shows = _apply_cinema_filter(shows, cinema_filter)
-        return shows
+        date_key = date.replace("-", "")
+        booking_url = (
+            f"{BMS_BASE_URL}/movies/{self._city_slug()}/"
+            f"{movie_slug}/buytickets/{movie_code}/{date_key}"
+        )
+        logger.info("Built booking URL: %s.", booking_url)
+        return await self._find_shows_from_url(page, booking_url, date, time_range)
 
     async def _find_shows_direct(
         self,
@@ -631,6 +660,8 @@ class BMSPlaywrightAutomator:
                 logger.warning("Page not found at %s", url)
                 continue
 
+            await self._handle_region_popup(page)
+            await page.wait_for_timeout(1500)
             await self._dismiss_overlays(page)
             await self._select_date(page, date)
             shows = await self._scrape_shows(page, start_hour, end_hour)
@@ -647,11 +678,9 @@ class BMSPlaywrightAutomator:
     async def _find_shows_from_url(
         self,
         page: "playwright.async_api.Page",
-        movie_name: str,
-        date: str,
-        start_hour: int,
-        end_hour: int,
         booking_url: str,
+        date: str,
+        time_range: Tuple[int, int],
     ) -> List[Dict[str, Any]]:
         """
         Navigate directly to a BMS booking URL and scrape showtimes.
@@ -659,6 +688,7 @@ class BMSPlaywrightAutomator:
         The date embedded in the URL is parsed; if *date* is non-empty it
         overrides the URL date.
         """
+        start_hour, end_hour = time_range
         parsed = parse_booking_url(booking_url)
         if parsed is None:
             logger.error(
@@ -685,15 +715,24 @@ class BMSPlaywrightAutomator:
                         effective_date, parsed["date"])
 
         logger.info(
-            "[direct-url] Navigating to '%s' — movie='%s' (slug=%s) on %s, "
-            "time window %02d:00–%02d:00",
-            booking_url, movie_name, parsed["movie_slug"],
-            effective_date, start_hour, end_hour,
+            "[direct-url] Navigating to '%s' — slug=%s on %s, time window %02d:00–%02d:00",
+            booking_url, parsed["movie_slug"], effective_date, start_hour, end_hour,
         )
 
         # Navigate.
         await page.goto(booking_url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
         await page.wait_for_timeout(3000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        # Handle the BMS region/city selection popup only if the page is
+        # actually showing one; otherwise the header city label can be
+        # mistaken for a modal and we end up clicking away from the show list.
+        parsed_city = parsed.get("city", "").capitalize()
+        await self._handle_region_popup(page, city=parsed_city or self.city)
+        await page.wait_for_timeout(1500)
 
         await self._dismiss_overlays(page)
 
@@ -815,182 +854,478 @@ class BMSPlaywrightAutomator:
         """
         Extract showtimes from the current page that fall within
         [*start_hour*, *end_hour*).
+
+        **Key design decisions to prevent wrong-cinema clicks:**
+
+        * Cinema containers are identified by finding elements that contain
+          BOTH a cinema-name heading AND showtime buttons — not by generic
+          section/div selectors.
+        * Cinema name is extracted ONLY from the heading element inside
+          each container (not from arbitrary text lines).
+        * Every show dict stores a stable CSS selector so the button can be
+          **re-located** later (ElementHandles go stale).
+        * Each scraped show is logged individually so you can visually
+          verify cinema names match the page.
         """
         shows: List[Dict[str, Any]] = []
         await page.wait_for_timeout(2000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
 
-        # --- Strategy A: BMS often uses a venue-card layout ----------------
-        venue_selectors = [
+        time_pattern = re.compile(r"\b\d{1,2}:\d{2}\s*(?:AM|PM)\b", re.IGNORECASE)
+
+        # =================================================================
+        # Phase 1 — Find cinema containers by looking for elements that
+        #           have BOTH a cinema-name heading AND showtime buttons.
+        # =================================================================
+        cinema_containers: List[Any] = []
+
+        # Strategy A: look for containers that contain a link to /cinemas/
+        # (the cinema name heading) AND a link to /buytickets/ (showtime).
+        for sel in [
+            # divs/sections containing BOTH a cinema link AND a booking link
+            "div:has(a[href*='/cinemas/']):has(a[href*='/buytickets/'])",
+            "li:has(a[href*='/cinemas/']):has(a[href*='/buytickets/'])",
+            "section:has(a[href*='/cinemas/']):has(a[href*='/buytickets/'])",
+            # BMS-specific test-id patterns
             "[data-testid='cinema-container']",
-            ".cinema-container",
-            "[class*='venue']",
-            "[class*='cinema']",
-            "[class*='theatre']",
-            "li[class*='list']",
-            ".listing-card",
-        ]
-
-        venue_els: List[Any] = []
-        for sel in venue_selectors:
-            venue_els = await page.query_selector_all(sel)
-            if venue_els:
-                logger.debug("Found %d venue elements via '%s'.", len(venue_els), sel)
-                break
-
-        if not venue_els:
-            # Broader fallback: scrape the whole page for showtime patterns.
-            logger.warning("No venue containers found; using whole-page fallback.")
-            return await self._scrape_shows_fallback(page, start_hour, end_hour)
-
-        current_url = page.url
-
-        for venue_el in venue_els:
+            "[data-testid='venue-container']",
+            # venue / cinema card classes
+            "[class*='venue-card']",
+            "[class*='cinema-card']",
+            "[class*='theatre-card']",
+            "[class*='VenueCard']",
+            "[class*='CinemaCard']",
+            "[class*='listing-card']",
+        ]:
             try:
-                venue_text = (await venue_el.inner_text()).strip()
+                matches = await page.query_selector_all(sel)
+                visible_matches = []
+                for m in matches:
+                    try:
+                        if await m.is_visible():
+                            text = (await m.inner_text()).strip()
+                            if text and time_pattern.search(text):
+                                visible_matches.append(m)
+                    except Exception:
+                        continue
+                if visible_matches:
+                    cinema_containers = visible_matches
+                    logger.debug("[shows] Found %d cinema containers via '%s'.", len(cinema_containers), sel)
+                    break
             except Exception:
                 continue
 
-            if not venue_text:
-                continue
-
-            # Extract venue name (first meaningful line or an h3 / strong tag).
-            venue_name: Optional[str] = None
-            for tag in ["h3", "h4", "strong", "[class*='name']", "[class*='title']"]:
-                try:
-                    name_el = await venue_el.query_selector(tag)
-                    if name_el:
-                        venue_name = (await name_el.inner_text()).strip()
-                        if venue_name:
-                            break
-                except Exception:
-                    continue
-            if venue_name is None:
-                # Use the first line as the venue name.
-                venue_name = venue_text.split("\n")[0].strip()
-            if not venue_name:
-                continue
-
-            # Find showtime buttons / links within the venue container.
-            time_selectors = [
-                "a[href*='buytickets']",
-                "a:has-text(':')",
-                "button:has-text(':')",
+        # Strategy B: if no containers found via structural selectors,
+        # find all showtime links, walk up the DOM to find their parent
+        # cinema containers, and group them.
+        if not cinema_containers:
+            logger.debug("[shows] No structural cinema containers — falling back to showtime-first detection.")
+            showtime_els: List[Any] = []
+            for sel in [
+                "a[href*='/buytickets/']",
+                "a[href*='seat-layout']",
                 "[data-testid='showtime']",
                 ".showtime-btn",
                 ".showtime",
-                "[class*='time']",
-                "[class*='show']",
-            ]
-            time_els: List[Any] = []
-            for tsel in time_selectors:
-                time_els = await venue_el.query_selector_all(tsel)
-                if time_els:
+                "[class*='showtime']",
+            ]:
+                try:
+                    matches = await page.query_selector_all(sel)
+                    for m in matches:
+                        try:
+                            if await m.is_visible():
+                                text = (await m.inner_text()).strip()
+                                if time_pattern.search(text):
+                                    showtime_els.append(m)
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+                if showtime_els:
                     break
 
+            if not showtime_els:
+                # Last resort: any button/link with a time pattern.
+                for sel in ["a", "button", "[role='button']", "div", "span"]:
+                    try:
+                        matches = await page.query_selector_all(sel)
+                        for m in matches:
+                            try:
+                                if await m.is_visible():
+                                    text = (await m.inner_text()).strip()
+                                    if time_pattern.search(text):
+                                        showtime_els.append(m)
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+                    if showtime_els:
+                        break
+
+            # Group showtime elements by their parent cinema name.
+            cinema_groups: Dict[str, List[Any]] = {}
+            for time_el in showtime_els:
+                cinema_name = await self._find_parent_cinema_for_showtime(page, time_el)
+                if not cinema_name:
+                    continue
+                cinema_name = cinema_name.strip()
+                cinema_groups.setdefault(cinema_name, []).append(time_el)
+
+            # Synthesise container info — we don't have real container
+            # ElementHandles, but we have cinema_name → [showtime_els].
+            # Store as tuples for the next loop.
+            cinema_containers = [(name, els) for name, els in cinema_groups.items()]
+            logger.debug("[shows] Grouped %d cinemas from %d showtime elements (fallback mode).",
+                         len(cinema_containers), len(showtime_els))
+
+        if not cinema_containers:
+            screenshot_path = f"screenshots/show_scrape_{int(datetime.utcnow().timestamp())}.png"
+            try:
+                os.makedirs("screenshots", exist_ok=True)
+                await page.screenshot(path=screenshot_path, full_page=True)
+                logger.warning("[shows] No cinema containers found; screenshot saved to %s", screenshot_path)
+            except Exception as exc:
+                logger.warning("[shows] Could not save scrape screenshot: %s", exc)
+            raise RuntimeError("No cinema containers found on the booking page.")
+
+        # =================================================================
+        # Phase 2 — For each cinema container, extract:
+        #           1. Cinema name (from heading ONLY)
+        #           2. Showtime buttons (from THIS container ONLY)
+        #           3. Stable CSS selector for re-location
+        # =================================================================
+        seen: set[tuple[str, str, str]] = set()
+
+        for item in cinema_containers:
+            # --- Unwrap item: may be (ElementHandle) or (str, [ElementHandle]) ---
+            if isinstance(item, tuple):
+                # Fallback mode: (cinema_name, [showtime_elements])
+                cinema_name, time_els = item
+                venue_el = None
+            else:
+                # Normal mode: item is a Playwright ElementHandle
+                venue_el = item
+                cinema_name = ""
+                time_els = []
+
+                # --- Extract cinema name from THIS container's heading ONLY ---
+                # Priority: <a> linking to /cinemas/ (most reliable BMS pattern),
+                # then <h3>/<h4>, then any heading.
+                heading_selectors_in_order = [
+                    "a[href*='/cinemas/']",
+                    "a[href*='/theatres/']",
+                    "h3",
+                    "h4",
+                    "h2",
+                    "h5",
+                    "strong",
+                    "[class*='venue-name']",
+                    "[class*='cinema-name']",
+                    "[class*='VenueName']",
+                    "[class*='CinemaName']",
+                ]
+                for h_sel in heading_selectors_in_order:
+                    try:
+                        heading_els = await venue_el.query_selector_all(h_sel)
+                        for heading_el in heading_els:
+                            try:
+                                if not await heading_el.is_visible():
+                                    continue
+                                heading_text = (await heading_el.inner_text()).strip()
+                            except Exception:
+                                continue
+                            # Reject if it looks like a showtime or action button.
+                            if not heading_text:
+                                continue
+                            if time_pattern.search(heading_text):
+                                continue
+                            if re.search(r"^(book|select|cancel|proceed|pay|continue|buy|close|skip)$",
+                                         heading_text, re.I):
+                                continue
+                            if len(heading_text) >= 3:
+                                cinema_name = heading_text
+                                break
+                        if cinema_name:
+                            break
+                    except Exception:
+                        continue
+                    if cinema_name:
+                        break
+
+                # --- Extract showtime elements from THIS container ONLY ---
+                for tsel in [
+                    "a[href*='/buytickets/']",
+                    "a[href*='seat-layout']",
+                    "[data-testid='showtime']",
+                    ".showtime-btn",
+                    ".showtime",
+                    "[class*='showtime']",
+                ]:
+                    try:
+                        matches = await venue_el.query_selector_all(tsel)
+                        for match in matches:
+                            try:
+                                if not await match.is_visible():
+                                    continue
+                                time_text = (await match.inner_text()).strip()
+                            except Exception:
+                                continue
+                            if time_pattern.search(time_text):
+                                time_els.append(match)
+                    except Exception:
+                        continue
+                    if time_els:
+                        break
+
+                # Fallback: generic button/a inside container.
+                if not time_els:
+                    for tsel in ["a", "button", "[role='button']", "div", "span"]:
+                        try:
+                            matches = await venue_el.query_selector_all(tsel)
+                            for match in matches:
+                                try:
+                                    if not await match.is_visible():
+                                        continue
+                                    time_text = (await match.inner_text()).strip()
+                                except Exception:
+                                    continue
+                                if time_pattern.search(time_text):
+                                    time_els.append(match)
+                        except Exception:
+                            continue
+
+                # --- If still no cinema name, try fallback extraction ---
+                if not cinema_name:
+                    try:
+                        venue_text = (await venue_el.inner_text()).strip()
+                        raw_lines = [line.strip() for line in venue_text.splitlines() if line.strip()]
+                        for line in raw_lines:
+                            if not time_pattern.search(line) and not re.search(
+                                r"^cancelled?|^sold out|^no seats|^book now$|^\d{1,2}:\d{2}",
+                                line, re.I,
+                            ):
+                                if len(line) >= 3:
+                                    cinema_name = line
+                                    break
+                    except Exception:
+                        pass
+
+            if not cinema_name:
+                logger.debug("[shows] Skipping container — could not determine cinema name.")
+                continue
+
+            # =============================================================
+            # Process each showtime element in this cinema
+            # =============================================================
             for time_el in time_els:
                 try:
-                    time_text = (await time_el.inner_text()).strip()
+                    raw_text = (await time_el.inner_text()).strip()
                 except Exception:
                     continue
 
-                # Parse hour from the text.
-                hour = self._extract_hour(time_text)
-                if hour is None:
-                    continue
-                if not (start_hour <= hour < end_hour):
+                match = time_pattern.search(raw_text)
+                if not match:
                     continue
 
-                # Get the show URL.
-                show_url: Optional[str] = None
+                time_text = match.group(0).upper()
+                hour = self._extract_hour(time_text)
+                if hour is None or not (start_hour <= hour < end_hour):
+                    continue
+
+                href = None
                 try:
                     href = await time_el.get_attribute("href")
-                    if href:
-                        show_url = href if href.startswith("http") else f"{BMS_BASE_URL}{href}"
                 except Exception:
                     pass
-                if show_url is None:
-                    show_url = current_url
+                show_url = None
+                if href:
+                    show_url = href if href.startswith("http") else f"{BMS_BASE_URL}{href}"
 
-                # Try to get a price.
-                price: Optional[float] = self._extract_price(venue_text)
-                # Also look for a price near the time element.
+                # --- Build a stable CSS selector for re-locating this button later ---
+                show_selector = await self._build_show_selector(
+                    page, time_el, cinema_name, time_text,
+                )
+
+                price: Optional[float] = self._extract_price(raw_text)
                 if price is None:
                     try:
-                        parent_text = (await time_el.evaluate("el => el.parentElement?.innerText || ''")).strip()
+                        parent_text = (await time_el.evaluate(
+                            "el => el.parentElement?.innerText || ''"
+                        )).strip()
                         price = self._extract_price(parent_text)
                     except Exception:
                         pass
 
+                dedupe_key = (cinema_name.lower(), time_text, show_url or "")
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
                 shows.append({
-                    "venue": venue_name,
+                    "cinema": cinema_name,
+                    "venue": cinema_name,
                     "show_time": time_text,
+                    "show_element": time_el,
+                    "_showtime_element": time_el,
+                    "_show_selector": show_selector,
+                    "_cinema_name": cinema_name,
+                    "_show_time_text": time_text,
                     "show_url": show_url,
                     "price": price,
                 })
-                logger.debug(
-                    "Found show: %s | %s | ₹%s",
-                    venue_name, time_text, price,
+
+                logger.info(
+                    '[shows] CINEMA: "%s" | TIME: "%s" | HAS ELEMENT: True | HAS URL: %s',
+                    cinema_name, time_text, bool(show_url),
                 )
+
+        if not shows:
+            screenshot_path = f"screenshots/show_scrape_{int(datetime.utcnow().timestamp())}.png"
+            try:
+                os.makedirs("screenshots", exist_ok=True)
+                await page.screenshot(path=screenshot_path, full_page=True)
+                logger.warning("[shows] Scrape found containers but no showtimes; screenshot saved to %s", screenshot_path)
+            except Exception as exc:
+                logger.warning("[shows] Could not save scrape screenshot: %s", exc)
+            raise RuntimeError("No valid showtimes found on the booking page.")
 
         logger.info("Scraped %d showtimes matching the criteria.", len(shows))
         return shows
 
-    async def _scrape_shows_fallback(
+    # ------------------------------------------------------------------
+    # _find_parent_cinema_for_showtime — walk up DOM from showtime button
+    # ------------------------------------------------------------------
+
+    async def _find_parent_cinema_for_showtime(
         self,
         page: "playwright.async_api.Page",
-        start_hour: int,
-        end_hour: int,
-    ) -> List[Dict[str, Any]]:
-        """Whole-page regex-based fallback scraper."""
-        shows: List[Dict[str, Any]] = []
-        body_text = await page.inner_text("body")
-        current_url = page.url
+        time_el: "playwright.async_api.ElementHandle",
+    ) -> Optional[str]:
+        """
+        Walk up the DOM from a showtime element to find the cinema name.
 
-        # Pattern: look for time strings like "10:30 AM" or "18:45".
-        time_pattern = re.compile(
-            r"(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?",
-        )
-        for match in time_pattern.finditer(body_text):
-            raw_hour = int(match.group(1))
-            minute_str = match.group(2)
-            ampm = (match.group(3) or "").upper()
-            hour = self._normalize_hour(raw_hour, ampm)
+        Used as a fallback when structural cinema containers cannot be
+        identified by CSS selectors alone.  Evaluates JavaScript to climb
+        parent nodes looking for cinema-name patterns (links to /cinemas/,
+        heading tags, or venue-name classed elements).
+        """
+        try:
+            cinema_name = await time_el.evaluate("""
+                (el) => {
+                    let current = el;
+                    for (let i = 0; i < 8; i++) {
+                        if (!current || !current.parentElement) break;
+                        current = current.parentElement;
 
-            if not (start_hour <= hour < end_hour):
+                        // Priority 1: <a> linking to /cinemas/ or /theatres/
+                        const cinemaLinks = current.querySelectorAll(
+                            'a[href*="/cinemas/"], a[href*="/theatres/"]'
+                        );
+                        for (const link of cinemaLinks) {
+                            const text = link.textContent.trim();
+                            if (text.length >= 3 && text.length < 100
+                                && !/\\d{1,2}:\\d{2}\\s*(AM|PM)/i.test(text)) {
+                                return text;
+                            }
+                        }
+
+                        // Priority 2: heading elements
+                        const headings = current.querySelectorAll(
+                            'h1, h2, h3, h4, h5, h6, strong, '
+                            + '[class*="venue-name"], [class*="cinema-name"], '
+                            + '[class*="VenueName"], [class*="CinemaName"], '
+                            + '[class*="theatre-name"], [class*="TheatreName"]'
+                        );
+                        for (const h of headings) {
+                            const text = h.textContent.trim();
+                            if (text.length >= 3 && text.length < 100
+                                && !/\\d{1,2}:\\d{2}\\s*(AM|PM)/i.test(text)
+                                && !/^(book|select|cancel|proceed|pay|continue|buy|close|skip)$/i.test(text)) {
+                                return text;
+                            }
+                        }
+                    }
+                    return null;
+                }
+            """)
+            return cinema_name
+        except Exception as exc:
+            logger.debug("[shows] Failed to walk-up DOM for cinema name: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # _build_show_selector — stable CSS selector for re-locating a showtime button
+    # ------------------------------------------------------------------
+
+    async def _build_show_selector(
+        self,
+        page: "playwright.async_api.Page",
+        time_el: "playwright.async_api.ElementHandle",
+        cinema_name: str,
+        time_text: str,
+    ) -> str:
+        """
+        Build a stable CSS selector string that can re-locate *time_el*
+        after navigation / DOM mutations.
+
+        Tries, in order:
+
+        1. A unique data-attribute on the button itself (``data-testid``,
+           ``data-showtime``, ``id``).
+        2. A parent-container selector (id or data attribute) combined
+           with a ``:has-text()`` filter for the showtime.
+        3. A Playwright locator chain: ``text=<cinema> >> text=<time>``
+           (the ``>>`` operator means "inside" in Playwright).
+        """
+        # --- Strategy 1: unique attribute on the button itself ---
+        for attr in ["data-testid", "data-showtime", "data-showtime-id",
+                      "data-time", "data-venue", "id"]:
+            try:
+                value = await time_el.get_attribute(attr)
+                if value:
+                    # Escape double-quotes in the value.
+                    safe_val = value.replace('"', '\\"')
+                    return f'[{attr}="{safe_val}"]'
+            except Exception:
                 continue
 
-            time_str = f"{raw_hour:02d}:{minute_str} {ampm}".strip()
+        # --- Strategy 2: parent container selector + :has-text() ---
+        try:
+            parent_sel = await time_el.evaluate("""
+                (el) => {
+                    let current = el;
+                    for (let i = 0; i < 6; i++) {
+                        if (!current || !current.parentElement) break;
+                        current = current.parentElement;
+                        const id = current.getAttribute('id');
+                        if (id) return '#' + CSS.escape(id);
+                        const testid = current.getAttribute('data-testid');
+                        if (testid) return '[data-testid="' + testid.replace(/"/g, '\\\\"') + '"]';
+                        const venue = current.getAttribute('data-venue');
+                        if (venue) return '[data-venue="' + venue.replace(/"/g, '\\\\"') + '"]';
+                        const cinema = current.getAttribute('data-cinema');
+                        if (cinema) return '[data-cinema="' + cinema.replace(/"/g, '\\\\"') + '"]';
+                    }
+                    return null;
+                }
+            """)
+            if parent_sel:
+                escaped_time = time_text.replace('"', '\\"')
+                # Look for link or button inside the parent with this time text.
+                return f'{parent_sel} a:has-text("{escaped_time}"), {parent_sel} button:has-text("{escaped_time}")'
+        except Exception:
+            pass
 
-            # Try to find surrounding context for a venue name.
-            pos = match.start()
-            context_window = body_text[max(0, pos - 200):pos + 200]
-            # Heuristic: the venue name is often the line above the time.
-            lines = context_window.split("\n")
-            venue = "Unknown"
-            for line in reversed(lines):
-                line = line.strip()
-                if line and not re.search(r"\d{1,2}:\d{2}", line) and len(line) > 3:
-                    venue = line
-                    break
-
-            shows.append({
-                "venue": venue,
-                "show_time": time_str,
-                "show_url": current_url,
-                "price": self._extract_price(context_window),
-            })
-
-        # Deduplicate.
-        seen = set()
-        unique: List[Dict[str, Any]] = []
-        for s in shows:
-            key = (s["venue"], s["show_time"])
-            if key not in seen:
-                seen.add(key)
-                unique.append(s)
-
-        logger.info("Fallback scraper found %d showtimes.", len(unique))
-        return unique
+        # --- Strategy 3: Playwright text locator chain ---
+        # This is a Playwright-specific selector using >> (inside) chaining.
+        # It finds an element containing cinema_name, then inside it,
+        # an element containing time_text.
+        escaped_cinema = cinema_name.replace('"', '\\"')
+        escaped_time = time_text.replace('"', '\\"')
+        return f'text="{escaped_cinema}" >> text="{escaped_time}"'
 
     # ------------------------------------------------------------------
     # Internal: overlay / popup dismissal
@@ -999,6 +1334,12 @@ class BMSPlaywrightAutomator:
     async def _dismiss_overlays(self, page: "playwright.async_api.Page") -> None:
         """Attempt to close common overlays, popups, and location prompts."""
         dismiss_selectors = [
+            # BMS-specific bottom-sheet / welcome modal close button.
+            "[data-testid='modalClose']",
+            "#bottomSheet-model-close",
+            "div[id*='bottomSheet'] [data-testid='modalClose']",
+            "div[id*='bottomSheet'] button",
+            # Generic close / dismiss buttons.
             "button:has-text('No thanks')",
             "button:has-text('Not Now')",
             "button:has-text('Later')",
@@ -1030,6 +1371,241 @@ class BMSPlaywrightAutomator:
             await page.wait_for_timeout(300)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Internal: region / city popup handling
+    # ------------------------------------------------------------------
+
+    async def _handle_region_popup(
+        self,
+        page: "playwright.async_api.Page",
+        city: Optional[str] = None,
+    ) -> bool:
+        """
+        Handle the BMS region/city selection popup that appears on first visit.
+
+        BMS often shows a modal asking the user to select their city before
+        allowing interaction with the rest of the page.  This method:
+
+        1. Waits up to 5 seconds for a city-selection modal to appear.
+        2. Tries, in order:
+              a) Type *city* into the region search box and press Enter.
+              b) Click the city name matching *city* (if provided).
+              c) Click a close / skip button to dismiss the popup.
+        3. If nothing is found within the timeout, logs a warning and
+           returns ``False`` (the popup may not have appeared at all).
+
+        Parameters
+        ----------
+        page : Page
+            The Playwright page that may be showing the popup.
+        city : str, optional
+            The desired city name (e.g. ``"Coimbatore"``).  If the popup
+            lists city names and this is provided, the matching city will
+            be clicked.  Defaults to ``self.city`` when omitted.
+
+        Returns
+        -------
+        bool
+            ``True`` if a popup was detected and handled, ``False`` otherwise.
+        """
+        if city is None:
+            city = self.city
+        city = city.strip()
+
+        logger.info("[region-popup] Checking for city/region selection popup …")
+
+        async def _first_visible(selector_list: List[str]) -> Optional[Tuple[str, Any]]:
+            for selector in selector_list:
+                try:
+                    element = await page.query_selector(selector)
+                    if element and await element.is_visible() and await _looks_like_popup(element):
+                        return selector, element
+                except Exception:
+                    continue
+            return None
+
+        async def _first_visible_text_match(text: str) -> Optional[Tuple[str, Any]]:
+            pattern = re.compile(rf"^{re.escape(text)}$", re.IGNORECASE)
+            candidate = page.locator("button, a, [role='button'], li, div, span").filter(has_text=pattern)
+            try:
+                count = await candidate.count()
+                for index in range(count):
+                    element = candidate.nth(index)
+                    if await element.is_visible() and await _looks_like_popup(element):
+                        return f"text=/{re.escape(text)}/i", element
+            except Exception:
+                return None
+            return None
+
+        async def _first_visible_input() -> Optional[Tuple[str, Any]]:
+            role_selectors = [
+                "textbox",
+                "searchbox",
+            ]
+            for role in role_selectors:
+                try:
+                    locator = page.get_by_role(role)
+                    count = await locator.count()
+                    for index in range(count):
+                        element = locator.nth(index)
+                        if await element.is_visible() and await _looks_like_popup(element):
+                            return f"role={role}", element
+                except Exception:
+                    continue
+
+            input_selectors = [
+                "input[placeholder='Search for your city']",
+                "input[placeholder='Search for your city' i]",
+                "input[placeholder*='city' i]",
+                "input[placeholder*='location' i]",
+                "input[placeholder*='search' i]",
+                "input[type='search']",
+                "[role='searchbox']",
+                "[role='textbox']",
+                "[contenteditable='true']",
+                "textarea",
+                "input[type='text']",
+            ]
+            for selector in input_selectors:
+                try:
+                    elements = await page.query_selector_all(selector)
+                    for element in elements:
+                        if element and await element.is_visible() and await _looks_like_popup(element):
+                            return selector, element
+                except Exception:
+                    continue
+            return None
+
+        async def _looks_like_popup(element: Any) -> bool:
+            try:
+                return bool(await element.evaluate(
+                    """
+                    (el) => {
+                        const popupLike = (node) => {
+                            if (!node || !node.getAttribute) return false;
+                            const role = (node.getAttribute('role') || '').toLowerCase();
+                            if (role === 'dialog' || role === 'alertdialog') return true;
+                            if ((node.getAttribute('aria-modal') || '').toLowerCase() === 'true') return true;
+                            const label = `${node.id || ''} ${node.className || ''}`;
+                            return /modal|popup|dialog|overlay|sheet|drawer/i.test(label);
+                        };
+
+                        let current = el;
+                        for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
+                            if (popupLike(current)) return true;
+                        }
+                        return false;
+                    }
+                    """
+                ))
+            except Exception:
+                return False
+
+        region_indicators = [
+            "text=/select.*city/i",
+            "text=/choose.*city/i",
+            "text=/detect.*location/i",
+            "text=/your.*city/i",
+            "text=/popular.*cities/i",
+            "text=/select.*region/i",
+            "[data-testid='city-modal']",
+            "[data-testid='region-modal']",
+            ".city-modal",
+            ".region-modal",
+            ".city-selector",
+            "[class*='city-select']",
+            "[class*='region-select']",
+        ]
+        city_selectors = [
+            f"text=/^{re.escape(city)}$/i",
+            f"a:has-text('{city}')",
+            f"button:has-text('{city}')",
+            f"[role='button']:has-text('{city}')",
+            f"span:has-text('{city}')",
+            f"div:has-text('{city}')",
+            f"li:has-text('{city}')",
+            f"[class*='city']:has-text('{city}')",
+            f"[class*='City']:has-text('{city}')",
+        ]
+        close_selectors = [
+            "button[aria-label='Close']",
+            "[aria-label='Close']",
+            "[data-testid='close-btn']",
+            ".close-btn",
+            ".modal-close",
+            ".popup-close",
+            "button:has-text('✕')",
+            "button:has-text('×')",
+            "button:has-text('X')",
+            "span:has-text('✕')",
+            "span:has-text('×')",
+            "text=✕",
+            "text=×",
+            "button[class*='close' i]",
+            "button[class*='dismiss' i]",
+            "svg[class*='close' i]",
+            ".modal button:first-child",
+        ]
+        deadline = asyncio.get_running_loop().time() + 5.0
+        popup_detected = False
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                found = await _first_visible(region_indicators + close_selectors)
+                if found:
+                    logger.debug("[region-popup] Popup detected via: %s", found[0])
+                    popup_detected = True
+                    break
+            except Exception:
+                pass
+            await page.wait_for_timeout(250)
+
+        if not popup_detected:
+            logger.warning("[region-popup] No region/city popup detected within 5 seconds.")
+            return False
+
+        input_match = await _first_visible_input()
+        if input_match:
+            logger.info("[region-popup] Typing city '%s' into region search box: %s", city, input_match[0])
+            await input_match[1].click()
+            await page.wait_for_timeout(200)
+            await input_match[1].fill("")
+            await input_match[1].type(city, delay=60)
+            await page.wait_for_timeout(500)
+            await input_match[1].press("Enter")
+            await page.wait_for_timeout(1500)
+            logger.info("[region-popup] ✅ Region popup handled — city '%s' submitted via search box.", city)
+            return True
+
+        city_match = await _first_visible_text_match(city)
+        if city_match is None:
+            city_match = await _first_visible(city_selectors)
+        if city_match:
+            logger.info("[region-popup] Selecting city '%s' via: %s", city, city_match[0])
+            await city_match[1].click()
+            try:
+                await page.evaluate(
+                    "city => { try { localStorage.setItem('preferredCity', city); localStorage.setItem('selectedCity', city); } catch (e) {} }",
+                    city,
+                )
+            except Exception:
+                pass
+            await page.wait_for_timeout(1500)
+            logger.info("[region-popup] ✅ Region popup handled — city '%s' selected.", city)
+            return True
+
+        close_match = await _first_visible(close_selectors)
+        if close_match:
+            logger.info("[region-popup] Clicking close button: %s", close_match[0])
+            await close_match[1].click()
+            await page.wait_for_timeout(1500)
+            logger.info("[region-popup] ✅ Region popup dismissed via close button.")
+            return True
+
+        logger.warning(
+            "[region-popup] Popup was detected but no matching city search box, city button, or close control was found."
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Internal: time parsing helpers
@@ -1088,6 +1664,7 @@ class BMSPlaywrightAutomator:
         show: Dict[str, Any],
         num_tickets: Optional[int] = None,
         seat_pref: str = "center",
+        time_range: Optional[Tuple[int, int]] = None,
     ) -> Dict[str, Any]:
         """
         Navigate to the seat-selection page for *show*, pick the best
@@ -1138,7 +1715,7 @@ class BMSPlaywrightAutomator:
         )
 
         # --- 1. Navigate to seat map ------------------------------------
-        await self._navigate_to_seat_selection(page, show)
+        await self._navigate_to_seat_selection(page, show, time_range=time_range)
 
         # --- 2. Wait for seat map to materialise -------------------------
         seat_map_ready = await self._wait_for_seat_map(page)
@@ -1151,8 +1728,47 @@ class BMSPlaywrightAutomator:
                 "error": "Seat map did not load — no SVG/canvas/seat elements found.",
             }
 
+        # --- 2b. SAFETY CHECK: verify we are on the RIGHT cinema ----------
+        expected_cinema = show.get("cinema") or show.get("venue") or show.get("_cinema_name") or ""
+        if expected_cinema:
+            cinema_ok = await self._verify_cinema_on_seat_page(page, expected_cinema)
+            if cinema_ok:
+                logger.info(
+                    '[seats] Cinema name on seat page: "%s" matches expected ✅',
+                    expected_cinema,
+                )
+            else:
+                logger.error(
+                    '[seats] ❌ Wrong cinema! Expected "%s", but seat page '
+                    "shows a different cinema. Skipping this show.",
+                    expected_cinema,
+                )
+                try:
+                    os.makedirs("screenshots", exist_ok=True)
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    path = f"screenshots/wrong_cinema_{ts}.png"
+                    await page.screenshot(path=path, full_page=True)
+                    logger.warning("[seats] Wrong-cinema screenshot saved: %s", path)
+                except Exception as exc:
+                    logger.warning("[seats] Could not save wrong-cinema screenshot: %s", exc)
+                return {
+                    "selected_seats": [],
+                    "total_price": None,
+                    "category": None,
+                    "attempted": False,
+                    "error": (
+                        f"Wrong cinema! Expected \"{expected_cinema}\", "
+                        f"but landed on a different cinema."
+                    ),
+                }
+        else:
+            logger.info("[seats] ⚠️ No expected cinema name — skipping cinema verification.")
+
+        # Some seat-layout pages open with a modal asking for ticket count.
+        await self._handle_seat_count_prompt(page, num_tickets)
+
         # --- 3. Scrape all seat elements --------------------------------
-        seats = await self._scrape_seats(page)
+        seats = await self._scrape_seats(page, num_tickets)
         available = [s for s in seats if s.get("status") == "available"]
         logger.info(
             "[seats] Scraped %d total seats, %d available.",
@@ -1214,89 +1830,521 @@ class BMSPlaywrightAutomator:
         self,
         page: "playwright.async_api.Page",
         show: Dict[str, Any],
+        time_range: Optional[Tuple[int, int]] = None,
     ) -> None:
         """
-        Reach the seat map for *show*.  Tries, in order:
+        Reach the seat map for *show*.
 
-        1. Click a stored ``_showtime_element`` handle.
-        2. Navigate to ``show_url`` directly.
-        3. Find and click a showtime button on the current listing page
-           whose text/time matches *show*.
+        **Design decisions to prevent wrong-cinema clicks:**
+
+        1. **Direct URL is tried first** (most reliable — no DOM ambiguity).
+        2. The stored ``ElementHandle`` is **never trusted directly** —
+           instead the button is **re-located** using the stored CSS
+           selector or by matching cinema-name + time-text.
+        3. **Button text is verified** before clicking.
+        4. **Post-click outcome is detected** (URL change, modal, inline
+           expansion, or nothing) with detailed logging.
+        5. Falls back to theater-search and showtime-on-page search with
+           **cinema-context verification**.
         """
-        # --- Option 1: pre-captured element handle -----------------------
-        show_el = show.get("_showtime_element")
-        if show_el is not None:
-            try:
-                logger.info("[seats] Clicking stored showtime element handle.")
-                await show_el.click()
-                await page.wait_for_timeout(3000)
-                return
-            except Exception as exc:
-                logger.warning("[seats] Stored element click failed: %s", exc)
-
-        # --- Option 2: direct URL navigation -----------------------------
+        cinema_name = show.get("cinema") or show.get("venue") or show.get("_cinema_name") or ""
+        show_time_text = show.get("show_time") or show.get("_show_time_text") or ""
         show_url = show.get("show_url")
-        if show_url:
-            logger.info("[seats] Navigating to show URL: %s", show_url)
-            await page.goto(show_url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
-            await page.wait_for_timeout(3000)
-            await self._dismiss_overlays(page)
-            # Check if we're already on a seat-selection page.
-            if await self._wait_for_seat_map(page):
-                return
-            # If not, the URL may land on an intermediate page that needs
-            # another click (e.g., "Select Seats" button).
-            logger.info("[seats] Not on seat map yet — looking for seat-selection trigger.")
+        show_selector = show.get("_show_selector", "")
 
-        # --- Option 3: find and click a matching showtime on-page -------
-        show_time_text = show.get("show_time", "")
-        venue = show.get("venue", "")
+        # Pre-flight: close any leftover accessibility modal from a previous attempt.
+        await self._close_accessibility_modal(page)
+
         logger.info(
-            "[seats] Searching page for clickable showtime — venue=%r time=%r",
-            venue, show_time_text,
+            '[seats] Attempting cinema="%s" time="%s"',
+            cinema_name, show_time_text,
         )
 
-        time_selectors = [
-            "a[href*='buytickets']",
-            "button:has-text(':')",
-            "[data-testid='showtime']",
-            ".showtime-btn",
-            ".showtime",
-            "[class*='showtime']",
-        ]
-        for sel in time_selectors:
-            try:
-                els = await page.query_selector_all(sel)
-                for el in els:
-                    text = (await el.inner_text()).strip()
-                    # Match if the element text contains the showtime.
-                    if show_time_text and show_time_text in text:
-                        logger.info("[seats] Clicking showtime element: %s", text[:40])
-                        await el.click()
-                        await page.wait_for_timeout(3000)
-                        return
-            except Exception:
-                continue
+        # =================================================================
+        # Option A — Direct URL navigation (most reliable)
+        # =================================================================
+        if show_url:
+            logger.info("[seats] Navigating to show URL: %s", show_url)
+            url_before = page.url
+            await page.goto(show_url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT)
+            await page.wait_for_timeout(3000)
+            await self._handle_region_popup(page, self.city)
+            await self._dismiss_overlays(page)
+            url_after = page.url
 
-        # --- Last resort: look for ANY clickable book/select button -----
-        last_resort = [
+            if url_after != url_before:
+                logger.info("[seats] ✅ After navigation — URL changed to: %s", url_after[:120])
+            else:
+                logger.info("[seats] ⚠️ After navigation — URL unchanged: %s", url_after[:120])
+
+            # Check if we landed on seat map.
+            if await self._wait_for_seat_map(page):
+                logger.info("[seats] ✅ Seat map detected after direct URL navigation.")
+                return
+
+            # If not, the URL may land on an intermediate cinema page.
+            # Look for a "Select Seats" / showtime button on this page.
+            logger.info("[seats] Not on seat map yet — searching intermediate page for showtime trigger.")
+            if await self._click_showtime_for_venue(page, cinema_name, show_time_text, time_range=time_range):
+                await page.wait_for_timeout(2000)
+                if await self._wait_for_seat_map(page):
+                    logger.info("[seats] ✅ Seat map detected after clicking showtime on intermediate page.")
+                    return
+
+        # =================================================================
+        # Option B — Re-locate the button using stored CSS selector
+        # =================================================================
+        if show_selector:
+            logger.info('[seats] Re-locating button via stored selector: "%s"', show_selector[:80])
+            try:
+                button = page.locator(show_selector).first
+                if await button.count() > 0 and await button.is_visible():
+                    # --- Verify button text matches expected showtime ---
+                    button_text = (await button.inner_text()).strip()
+                    if show_time_text and show_time_text.upper() in button_text.upper():
+                        logger.info(
+                            '[seats] Re-located showtime button: text="%s" ✅',
+                            button_text[:40],
+                        )
+                    else:
+                        logger.warning(
+                            '[seats] ❌ Button text mismatch! Expected "%s", found "%s". '
+                            "Trying fallback strategies.",
+                            show_time_text, button_text[:40],
+                        )
+                        # Don't click — fall through to Option C.
+                        show_selector = ""  # invalidate
+                    if show_selector:
+                        # --- Click and detect outcome ---
+                        logger.info("[seats] Clicking showtime button...")
+                        url_before = page.url
+                        await button.click()
+                        if await self._detect_and_handle_post_click_state(
+                            page, url_before, cinema_name,
+                        ):
+                            return
+                else:
+                    logger.warning("[seats] ⚠️ Stored selector matched no visible element.")
+            except Exception as exc:
+                logger.warning("[seats] ⚠️ Re-location via stored selector failed: %s", exc)
+
+        # =================================================================
+        # Option C — Find button by cinema-context + time-text matching
+        # =================================================================
+        logger.info(
+            '[seats] Searching page for showtime button — cinema="%s" time="%s"',
+            cinema_name, show_time_text,
+        )
+
+        # --- C1: Find cinema container, then find time button inside it ---
+        button = await self._find_showtime_button_in_cinema_context(
+            page, cinema_name, show_time_text,
+        )
+        if button is not None:
+            # --- Verify button text ---
+            try:
+                button_text = (await button.inner_text()).strip()
+                if show_time_text and show_time_text.upper() in button_text.upper():
+                    logger.info(
+                        '[seats] Found button in cinema context: text="%s" ✅',
+                        button_text[:40],
+                    )
+                    logger.info("[seats] Clicking showtime button...")
+                    url_before = page.url
+                    await button.click()
+                    if await self._detect_and_handle_post_click_state(
+                        page, url_before, cinema_name,
+                    ):
+                        return
+                else:
+                    logger.warning(
+                        '[seats] ❌ Cinema-context button mismatch! '
+                        'Expected "%s", found "%s".',
+                        show_time_text, button_text[:40],
+                    )
+            except Exception as exc:
+                logger.warning("[seats] ❌ Cinema-context button click failed: %s", exc)
+
+        # --- C2: Use theater search box ---
+        if cinema_name:
+            if await self._search_theatre_and_click_showtime(
+                page, cinema_name, show_time_text, time_range=time_range,
+            ):
+                await page.wait_for_timeout(2000)
+                if await self._wait_for_seat_map(page):
+                    logger.info("[seats] ✅ Seat map detected after theater search.")
+                    return
+                # May have landed on a cinema page — try showtime click again.
+                if await self._click_showtime_for_venue(
+                    page, cinema_name, show_time_text, time_range=time_range,
+                ):
+                    await page.wait_for_timeout(2000)
+                    if await self._wait_for_seat_map(page):
+                        logger.info("[seats] ✅ Seat map detected after cinema-page showtime click.")
+                        return
+
+        # --- C3: Last resort — any Book / Select Seats button ---
+        for sel in [
             "a:has-text('Book')",
             "button:has-text('Select Seats')",
             "button:has-text('Book')",
             "text=/Select Seats/i",
-        ]
-        for sel in last_resort:
+        ]:
             try:
                 btn = await page.wait_for_selector(sel, timeout=2000)
                 if btn:
                     logger.info("[seats] Clicking fallback: %s", sel)
+                    url_before = page.url
                     await btn.click()
-                    await page.wait_for_timeout(3000)
-                    return
+                    if await self._detect_and_handle_post_click_state(
+                        page, url_before, cinema_name,
+                    ):
+                        return
             except Exception:
                 continue
 
-        logger.warning("[seats] Could not find a way to reach seat selection.")
+        logger.warning("[seats] ❌ Could not reach seat selection by any method.")
+
+    # ------------------------------------------------------------------
+    # _detect_and_handle_post_click_state — after clicking, figure out what happened
+    # ------------------------------------------------------------------
+
+    async def _detect_and_handle_post_click_state(
+        self,
+        page: "playwright.async_api.Page",
+        url_before: str,
+        cinema_name: str,
+    ) -> bool:
+        """
+        After clicking a showtime button, detect what happened and handle it.
+
+        Returns ``True`` if the seat map is now accessible, ``False`` otherwise.
+        """
+        await page.wait_for_timeout(2000)
+
+        url_after = page.url
+
+        # --- Check 1: URL changed → navigation occurred ---
+        if url_after != url_before:
+            logger.info("[seats] ✅ After click — URL changed to: %s", url_after[:120])
+            await self._handle_region_popup(page, self.city)
+            await self._dismiss_overlays(page)
+            if await self._wait_for_seat_map(page):
+                logger.info("[seats] ✅ Seat map detected on new page.")
+                return True
+            # May have landed on intermediate page — give showtime click another try.
+            logger.info("[seats] New URL but no seat map yet — may be intermediate page.")
+            return False
+
+        # --- Check 2: Modal / overlay appeared ---
+        modal_selectors = [
+            "[class*='modal']:visible",
+            "[class*='overlay']:visible",
+            "[class*='popup']:visible",
+            "[class*='dialog']:visible",
+            "[role='dialog']",
+            "[data-testid='seat-modal']",
+            ".seat-modal",
+        ]
+        for sel in modal_selectors:
+            try:
+                modal_el = await page.query_selector(sel)
+                if modal_el and await modal_el.is_visible():
+                    logger.info("[seats] ✅ After click — seat map modal appeared (via '%s').", sel)
+                    await page.wait_for_timeout(1000)
+                    if await self._wait_for_seat_map(page):
+                        logger.info("[seats] ✅ Seat map found inside modal.")
+                        return True
+                    break
+            except Exception:
+                continue
+
+        # --- Check 3: Inline seat map expanded below cinema ---
+        if await self._wait_for_seat_map(page):
+            logger.info("[seats] ✅ After click — seat map appeared inline on same page.")
+            return True
+
+        # --- Nothing detected — error ---
+        logger.warning("[seats] ❌ After click — URL is still: %s (unchanged)", url_after[:120])
+        logger.warning("[seats] ❌ No modal, no inline seat map found.")
+        try:
+            os.makedirs("screenshots", exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = f"screenshots/debug_showtime_click_fail_{ts}.png"
+            await page.screenshot(path=path, full_page=True)
+            logger.warning("[seats] Screenshot saved: %s", path)
+        except Exception as exc:
+            logger.warning("[seats] Could not save debug screenshot: %s", exc)
+        return False
+
+    # ------------------------------------------------------------------
+    # _find_showtime_button_in_cinema_context — find a time button near a cinema heading
+    # ------------------------------------------------------------------
+
+    async def _find_showtime_button_in_cinema_context(
+        self,
+        page: "playwright.async_api.Page",
+        cinema_name: str,
+        show_time_text: str,
+    ) -> Optional[Any]:
+        """
+        Find a showtime button that is inside the same cinema container
+        as *cinema_name*.
+
+        Uses Playwright locator chaining: find an element containing the
+        cinema name, then walk up to its container, then find a button
+        inside that container with the matching time text.  This prevents
+        clicking a button from a DIFFERENT cinema.
+        """
+        time_pattern = re.compile(r"\b\d{1,2}:\d{2}\s*(?:AM|PM)\b", re.IGNORECASE)
+
+        # Strategy: find the cinema-name element, then find the nearest
+        # common ancestor that also contains showtime buttons.
+        try:
+            # Find elements containing the cinema name.
+            cinema_locator = page.locator(f"text={cinema_name}").first
+            if await cinema_locator.count() == 0:
+                # Try substring match.
+                cinema_locator = page.locator(f":has-text('{cinema_name}')").first
+            if await cinema_locator.count() == 0 or not await cinema_locator.is_visible():
+                return None
+
+            # Get the cinema container by walking up from the cinema name
+            # element to a parent that contains time-pattern buttons.
+            container_handle = await cinema_locator.evaluate_handle("""
+                (el) => {
+                    let current = el;
+                    for (let i = 0; i < 6; i++) {
+                        if (!current || !current.parentElement) break;
+                        current = current.parentElement;
+                        const timeLinks = current.querySelectorAll(
+                            'a[href*="/buytickets/"], a[href*="seat-layout"], '
+                            + 'button, a, [role="button"]'
+                        );
+                        for (const link of timeLinks) {
+                            if (/\\d{1,2}:\\d{2}\\s*(AM|PM)/i.test(link.textContent)) {
+                                return current;  // This parent has showtimes → it's the container
+                            }
+                        }
+                    }
+                    return el.closest('div, section, li');
+                }
+            """)
+
+            # Within THIS container only, find the button with matching time.
+            time_pattern_str = show_time_text.replace('"', '\\"')
+            button = page.locator(f"text={time_pattern_str}").first
+
+            # Verify the button we found is actually inside the cinema container.
+            # If not, try a more specific locator.
+            try:
+                # Check if the found button's text also matches the expected time.
+                btn_text = (await button.inner_text()).strip()
+                if show_time_text.upper() not in btn_text.upper():
+                    return None
+            except Exception:
+                pass
+
+            return button
+
+        except Exception as exc:
+            logger.debug("[seats] Cinema-context button search failed: %s", exc)
+            return None
+
+    async def _search_theatre_and_click_showtime(
+        self,
+        page: "playwright.async_api.Page",
+        venue: str,
+        show_time_text: str,
+        time_range: Optional[Tuple[int, int]] = None,
+    ) -> bool:
+        """Use the buytickets theater search to narrow to *venue* and click a showtime."""
+        search_icon_candidates = page.locator("use[href*='icon-search-icon']")
+        selected_icon = None
+        for idx in range(await search_icon_candidates.count()):
+            candidate = search_icon_candidates.nth(idx)
+            try:
+                if not await candidate.is_visible():
+                    continue
+                box = await candidate.bounding_box()
+                if box and box.get("x", 0) > 900 and box.get("y", 0) > 150:
+                    selected_icon = candidate
+                    break
+            except Exception:
+                continue
+
+        if selected_icon is not None:
+            logger.info("[seats] Clicking theater search icon.")
+            try:
+                await selected_icon.evaluate("el => el.closest('div')?.click()")
+            except Exception:
+                try:
+                    await selected_icon.click()
+                except Exception:
+                    pass
+            await page.wait_for_timeout(800)
+        else:
+            logger.warning("[seats] Theater search icon not found; using a fallback click.")
+
+        await self._handle_region_popup(page, self.city)
+        await self._dismiss_overlays(page)
+
+        search_input = None
+        for selector in [
+            "input[placeholder*='Search by cinema or area']",
+            "input[placeholder*='cinema or area']",
+            "input[placeholder*='search' i]",
+            "input[type='text']",
+        ]:
+            try:
+                candidate = page.locator(selector).first
+                if await candidate.count() and await candidate.is_visible():
+                    search_input = candidate
+                    break
+            except Exception:
+                continue
+
+        if search_input is None:
+            logger.warning("[seats] Theater search input not found after clicking the icon.")
+            return False
+
+        logger.info("[seats] Searching theater list for %r.", venue)
+        try:
+            await search_input.fill(venue)
+        except Exception:
+            await search_input.click()
+            await search_input.press("Control+A")
+            await search_input.type(venue, delay=40)
+
+        await page.wait_for_timeout(1200)
+        return await self._click_showtime_for_venue(page, venue, show_time_text, time_range=time_range)
+
+    async def _click_showtime_for_venue(
+        self,
+        page: "playwright.async_api.Page",
+        venue: str,
+        show_time_text: str,
+        time_range: Optional[Tuple[int, int]] = None,
+    ) -> bool:
+        """Click the best matching showtime inside the currently visible theater card."""
+        desired_hour = self._extract_hour(show_time_text)
+        start_hour, end_hour = time_range if time_range is not None else (0, 24)
+        time_pattern = re.compile(r"\b\d{1,2}:\d{2}\s*[AP]M\b", re.IGNORECASE)
+
+        candidate_containers = page.locator("div").filter(has_text=venue)
+        best_clickable = None
+        best_distance = None
+
+        for idx in range(await candidate_containers.count()):
+            container = candidate_containers.nth(idx)
+            try:
+                if not await container.is_visible():
+                    continue
+                text = (await container.inner_text()).strip()
+                if venue.lower() not in text.lower():
+                    continue
+                if not time_pattern.search(text):
+                    continue
+            except Exception:
+                continue
+
+            for selector in ["button", "a", "div"]:
+                try:
+                    clickables = container.locator(selector)
+                    for cidx in range(await clickables.count()):
+                        clickable = clickables.nth(cidx)
+                        try:
+                            if not await clickable.is_visible():
+                                continue
+                            txt = (await clickable.inner_text()).strip()
+                            if not txt or not time_pattern.search(txt):
+                                continue
+                            hour = self._extract_hour(txt)
+                            if hour is None:
+                                continue
+                            if not (start_hour <= hour < end_hour):
+                                continue
+                            if show_time_text and show_time_text in txt:
+                                logger.info("[seats] Clicking exact showtime %r for %r.", txt, venue)
+                                await clickable.click()
+                                await page.wait_for_timeout(2500)
+                                return True
+                            target_hour = desired_hour if desired_hour is not None else hour
+                            distance = abs(target_hour - hour)
+                            if best_distance is None or distance < best_distance:
+                                best_distance = distance
+                                best_clickable = clickable
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+
+        if best_clickable is not None:
+            try:
+                txt = (await best_clickable.inner_text()).strip()
+            except Exception:
+                txt = ""
+            logger.info("[seats] Clicking nearest in-range showtime %r for %r.", txt, venue)
+            try:
+                await best_clickable.click()
+                await page.wait_for_timeout(2500)
+                return True
+            except Exception as exc:
+                logger.warning("[seats] Nearest showtime click failed: %s", exc)
+
+        return False
+
+    async def _handle_seat_count_prompt(
+        self,
+        page: "playwright.async_api.Page",
+        num_tickets: int,
+    ) -> bool:
+        """Handle the initial 'How many seats?' popup if BMS shows one."""
+        prompt_visible = False
+        for selector in [
+            "text=How many seats?",
+            "text=/How many seats/i",
+            "span:has-text('How many seats?')",
+            "div:has-text('How many seats?')",
+        ]:
+            try:
+                candidate = page.locator(selector).first
+                if await candidate.count() and await candidate.is_visible():
+                    prompt_visible = True
+                    break
+            except Exception:
+                continue
+
+        if not prompt_visible:
+            return False
+
+        logger.info("[seats] Seat-count prompt detected; selecting %d ticket(s).", num_tickets)
+
+        proceed = None
+        for selector in [
+            "button:has-text('Select Seats')",
+            "button:has-text('Continue')",
+            "button:has-text('Proceed')",
+        ]:
+            try:
+                candidate = page.locator(selector).first
+                if await candidate.count() and await candidate.is_visible():
+                    proceed = candidate
+                    break
+            except Exception:
+                continue
+
+        if proceed is None:
+            logger.warning("[seats] Seat-count prompt visible but no Select Seats button found.")
+            return False
+
+        try:
+            await proceed.click()
+            await page.wait_for_timeout(2000)
+            return True
+        except Exception as exc:
+            logger.warning("[seats] Failed to advance seat-count prompt: %s", exc)
+            return False
 
     # ------------------------------------------------------------------
     # _wait_for_seat_map — detect when the seat-picking UI is ready
@@ -1310,6 +2358,14 @@ class BMSPlaywrightAutomator:
         or a ``.seat-map`` wrapper.  Returns ``True`` as soon as one is
         detected.
         """
+        try:
+            if "/seat-layout/" in page.url:
+                logger.debug("[seats] Seat-layout route detected via URL.")
+                await page.wait_for_timeout(1000)
+                return True
+        except Exception:
+            pass
+
         seat_map_selectors = [
             "#seatLayoutContainer",
             "#seat-layout",
@@ -1332,14 +2388,109 @@ class BMSPlaywrightAutomator:
             except Exception:
                 continue
 
-        # Broad check: any canvas or SVG on the page?
+        # Treat the dedicated seat-layout route or its modal prompt as a
+        # ready signal, but do not rely on generic SVG/canvas presence.
         try:
-            if await page.query_selector("canvas") or await page.query_selector("svg"):
-                logger.debug("[seats] Found canvas/svg on page — assuming seat map.")
+            if "/seat-layout/" in page.url:
+                if await page.locator("text=How many seats?").count() or await page.locator("button:has-text('Select Seats')").count():
+                    logger.debug("[seats] Seat layout route detected — assuming seat map is ready.")
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    # ------------------------------------------------------------------
+    # _verify_cinema_on_seat_page — safety check that we're on the right cinema
+    # ------------------------------------------------------------------
+
+    async def _verify_cinema_on_seat_page(
+        self,
+        page: "playwright.async_api.Page",
+        expected_cinema: str,
+    ) -> bool:
+        """
+        Check whether *expected_cinema* appears on the current seat map page.
+
+        Searches the page body text, visible headings, and URL for the
+        cinema name.  Returns ``True`` if a match is found (case‑insensitive
+        substring), ``False`` otherwise.
+
+        This is a **safety check** to prevent booking seats at the wrong
+        cinema after a mis-click or mis-navigation.
+        """
+        if not expected_cinema:
+            return True  # can't verify
+
+        expected_lower = expected_cinema.strip().lower()
+
+        # --- Check 1: page body text ----------------------------------------
+        try:
+            body = (await page.inner_text("body")).lower()
+            if expected_lower in body:
+                logger.debug("[seats] Cinema name found in page body text.")
                 return True
         except Exception:
             pass
 
+        # --- Check 2: visible headings (h1-h4) -----------------------------
+        for tag in ["h1", "h2", "h3", "h4"]:
+            try:
+                headings = await page.query_selector_all(tag)
+                for h in headings:
+                    try:
+                        if not await h.is_visible():
+                            continue
+                        text = (await h.inner_text()).strip().lower()
+                        if expected_lower in text:
+                            logger.debug("[seats] Cinema name found in <%s> heading.", tag)
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        # --- Check 3: URL may contain cinema slug --------------------------
+        # e.g. /cinemas/pvr-brookfields/... or /theatre/...
+        try:
+            url_lower = page.url.lower()
+            # Extract cinema-related path segments.
+            cinema_slug_match = re.search(
+                r"/(?:cinemas?|theatres?|venue)/([^/]+)", url_lower,
+            )
+            if cinema_slug_match:
+                slug = cinema_slug_match.group(1).replace("-", " ")
+                if expected_lower in slug or slug in expected_lower:
+                    logger.debug("[seats] Cinema name matched via URL slug: %s", slug)
+                    return True
+        except Exception:
+            pass
+
+        # --- Check 4: cinema name near seat map element --------------------
+        try:
+            for sel in [
+                "#seatLayoutContainer",
+                "#seat-layout",
+                ".seat-map",
+                ".seatmap",
+                "[data-testid='seat-map']",
+            ]:
+                el = await page.query_selector(sel)
+                if el:
+                    parent_text = (await el.evaluate(
+                        "el => el.closest('div, section, main')?.innerText || ''"
+                    )).lower()
+                    if expected_lower in parent_text:
+                        logger.debug("[seats] Cinema name found near seat map container.")
+                        return True
+                    break
+        except Exception:
+            pass
+
+        logger.warning(
+            "[seats] ❌ Cinema verification FAILED — '%s' not found on page.",
+            expected_cinema,
+        )
         return False
 
     # ------------------------------------------------------------------
@@ -1347,7 +2498,7 @@ class BMSPlaywrightAutomator:
     # ------------------------------------------------------------------
 
     async def _scrape_seats(
-        self, page: "playwright.async_api.Page",
+        self, page: "playwright.async_api.Page", num_tickets: int = 2,
     ) -> List[Dict[str, Any]]:
         """
         Find all seat elements on the seat-selection page and return a
@@ -1369,7 +2520,6 @@ class BMSPlaywrightAutomator:
         svg_seat_selectors = [
             "svg circle",
             "svg rect",
-            "svg [data-seat-id]",
             "svg [data-row]",
             "svg .seat",
             "svg [class*='seat']",
@@ -1390,6 +2540,10 @@ class BMSPlaywrightAutomator:
             dom_seat_selectors = [
                 "[data-seat-id]",
                 "[data-testid*='seat']",
+                "button[aria-label*='seat' i]",
+                "[role='button'][aria-label*='seat' i]",
+                "[aria-label*='seat' i]",
+                "[role='gridcell']",
                 "div[class*='seat']",
                 "button[class*='seat']",
                 "li[class*='seat']",
@@ -1405,6 +2559,10 @@ class BMSPlaywrightAutomator:
                             seats.append(seat)
                     if seats:
                         break
+
+        # --- Pattern B2: Accessibility-grid seats --------------------------
+        if not seats:
+            seats = await self._scrape_seats_from_accessibility_grid(page, num_tickets)
 
         # --- Pattern C: Canvas — extract category labels at least -----------
         if not seats:
@@ -1521,6 +2679,313 @@ class BMSPlaywrightAutomator:
         except Exception as exc:
             logger.debug("[seats] Failed to parse seat element: %s", exc)
             return None
+
+    # ------------------------------------------------------------------
+    # _scrape_seats_from_accessibility_grid — text/ARIA fallback
+    # ------------------------------------------------------------------
+
+    async def _scrape_seats_from_accessibility_grid(
+        self,
+        page: "playwright.async_api.Page",
+        num_tickets: int = 2,
+    ) -> List[Dict[str, Any]]:
+        """
+        Scrape seats from the accessibility seat-selection surface.
+
+        The accessibility modal on BMS requires navigating through its UI:
+        1. Verify modal is open (or open it)
+        2. Set the ticket quantity to num_tickets
+        3. Select the first available seat category
+        4. Scrape the seat buttons from the modal
+        """
+        candidates: List[Dict[str, Any]] = []
+        
+        # Step 0: Open accessibility modal if needed
+        try:
+            access_button = page.get_by_role(
+                "button",
+                name=re.compile(r"Open accessibility|Accessibility", re.IGNORECASE),
+            )
+            if await access_button.count() > 0:
+                try:
+                    # Check if modal is already open by looking for "Accessibility Seat Selection" heading
+                    heading = page.locator("h1, h2, h3, h4").filter(
+                        has_text=re.compile(r"Accessibility.*Seat", re.IGNORECASE)
+                    )
+                    is_open = await heading.count() > 0 if heading else False
+                except Exception:
+                    is_open = False
+                
+                if not is_open and await access_button.first.is_visible():
+                    logger.info("[seats] Opening accessibility seat selection surface.")
+                    try:
+                        await access_button.first.click()
+                        await page.wait_for_timeout(1500)
+                    except Exception as exc:
+                        logger.debug("[seats] Accessibility button click failed: %s", exc)
+        except Exception:
+            pass
+
+        # Step 1: Try to set ticket quantity using the slider or dropdown on the main page
+        # (The modal might inherit this value)
+        try:
+            # Look for the ticket count slider/input on the main seat page
+            qty_controls = [
+                page.locator("[role='slider']"),  # slider control
+                page.locator("input[type='range']"),  # range input
+            ]
+            for control in qty_controls:
+                try:
+                    if await control.count() > 0 and await control.first.is_visible():
+                        current = (await control.first.get_attribute("aria-valuenow")) or "0"
+                        if str(num_tickets) not in current:
+                            # For sliders, set the value via playwright's locator
+                            await control.first.evaluate(
+                                f"el => {{ el.value = {num_tickets}; el.dispatchEvent(new Event('change', {{bubbles: true}})); }}"
+                            )
+                            await page.wait_for_timeout(500)
+                            logger.info(f"[seats] Set page ticket quantity to {num_tickets}.")
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # Step 2: Find and select a category from the modal's category dropdown
+        # The modal shows "Select Category" with options like GOLD, SILVER, etc.
+        category_selected = False
+        try:
+            # Strategy 1: Look for button/select with "Select Category" text
+            category_selectors = [
+                ("button", "Select Category"),
+                ("button", "Choose"),
+                ("[role='combobox']", "Select"),
+                ("select", None),
+            ]
+            
+            category_btn = None
+            for selector, text_filter in category_selectors:
+                try:
+                    if text_filter:
+                        category_locator = page.locator(selector).filter(
+                            has_text=re.compile(re.escape(text_filter), re.IGNORECASE)
+                        )
+                    else:
+                        category_locator = page.locator(selector)
+                    
+                    if await category_locator.count() > 0:
+                        category_btn = category_locator.first
+                        logger.debug(f"[seats] Found category dropdown via '{selector}' with text '{text_filter}'")
+                        break
+                except Exception:
+                    continue
+            
+            if category_btn and await category_btn.is_visible():
+                try:
+                    await category_btn.click()
+                    await page.wait_for_timeout(500)
+                    logger.debug("[seats] Clicked category dropdown button")
+                except Exception as e:
+                    logger.debug(f"[seats] Failed to click category button: {e}")
+                    category_btn = None
+            
+            # Step 2b: Find and click category option (GOLD, SILVER, etc.)
+            if category_btn:
+                # Wait for options to appear after clicking
+                try:
+                    # Look for visible category text anywhere on the page
+                    category_pattern = re.compile(
+                        r"^(GOLD|SILVER|PLATINUM|PREMIUM|EXECUTIVE|CLUB|RECLINER|BALCONY|LOUNGE)$",
+                        re.IGNORECASE
+                    )
+                    
+                    # Try multiple selector strategies for category options
+                    option_selectors = [
+                        ("button", None),
+                        ("[role='option']", None),
+                        ("li", None),
+                        ("div[class*='option']", None),
+                        ("div", None),
+                    ]
+                    
+                    for opt_selector, _ in option_selectors:
+                        option_locator = page.locator(opt_selector)
+                        try:
+                            if await option_locator.count() > 0:
+                                for idx in range(min(await option_locator.count(), 50)):
+                                    try:
+                                        opt_el = option_locator.nth(idx)
+                                        if not await opt_el.is_visible():
+                                            continue
+                                        
+                                        opt_text = (await opt_el.inner_text()).strip().upper()
+                                        if category_pattern.match(opt_text):
+                                            logger.debug(f"[seats] Found category option: {opt_text}")
+                                            await opt_el.click()
+                                            await page.wait_for_timeout(1000)
+                                            logger.info(f"[seats] Selected category: {opt_text}")
+                                            category_selected = True
+                                            break
+                                    except Exception:
+                                        continue
+                                
+                                if category_selected:
+                                    break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.debug(f"[seats] Category option selection failed: {e}")
+        except Exception as e:
+            logger.debug(f"[seats] Category selection strategy failed: {e}")
+
+        # Step 3: If we successfully selected a category, scrape seats from the modal
+        # Also scrape if we find seat-like elements even if category selection failed
+        should_scrape = category_selected
+        
+        # Check for seat-like elements even if category wasn't explicitly selected
+        if not should_scrape:
+            try:
+                seat_candidates = await page.locator("button[aria-label*='seat' i], [role='button'][aria-label*='[A-Z]' i]").count()
+                if seat_candidates > 0:
+                    logger.debug(f"[seats] Found {seat_candidates} seat-like elements; attempting scrape")
+                    should_scrape = True
+            except Exception:
+                pass
+        
+        if should_scrape:
+            logger.debug(f"[seats] Attempting to scrape seats (category_selected={category_selected})")
+            row_markers: List[Tuple[str, float]] = []
+            
+            # Find row markers (A, B, C, etc.)
+            for row_letter in [chr(code) for code in range(ord("A"), ord("Z") + 1)]:
+                try:
+                    row_locator = page.locator(
+                        "div, span, li, button"
+                    ).filter(
+                        has_text=re.compile(rf"^\s*{re.escape(row_letter)}\s*$", re.IGNORECASE)
+                    )
+                    
+                    if await row_locator.count() > 0:
+                        row_el = row_locator.first
+                        if await row_el.is_visible():
+                            box = await row_el.bounding_box()
+                            if box and 100 < box["y"] < 1000:  # reasonable Y bounds for modal content
+                                row_markers.append((row_letter, box["y"]))
+                except Exception:
+                    continue
+            
+            if row_markers:
+                logger.debug(f"[seats] Found {len(row_markers)} row markers: {[r[0] for r in row_markers]}")
+                row_markers.sort(key=lambda item: item[1])
+                
+                # Scrape seat buttons from the modal
+                seen: set[Tuple[str, int, int]] = set()
+                seat_elements = page.locator(
+                    "button, [role='button'], div[class*='seat'], span"
+                )
+                
+                try:
+                    seat_count = await seat_elements.count()
+                except Exception:
+                    seat_count = 0
+                
+                logger.debug(f"[seats] Found {seat_count} potential seat elements to iterate through")
+                
+                for idx in range(min(seat_count, 200)):  # limit iterations
+                    try:
+                        el = seat_elements.nth(idx)
+                        if not await el.is_visible():
+                            continue
+                        
+                        # Get text and aria-label
+                        text = ""
+                        try:
+                            text = (await el.inner_text()).strip()
+                        except Exception:
+                            pass
+                        
+                        aria_label = ""
+                        try:
+                            aria_label = (await el.get_attribute("aria-label")) or ""
+                        except Exception:
+                            pass
+                        
+                        # Look for seat pattern like "A1", "B12", etc.
+                        seat_match = None
+                        if aria_label:
+                            seat_match = re.search(r"([A-Z]{1,2}\d{1,2})", aria_label, re.IGNORECASE)
+                        if not seat_match and text:
+                            seat_match = re.search(r"([A-Z]{1,2}\d{1,2})", text, re.IGNORECASE)
+                        
+                        if not seat_match:
+                            continue
+                        
+                        seat_id = seat_match.group(1).upper()
+                        row = seat_id[0]
+                        
+                        # Parse column number
+                        col_match = re.search(r"(\d+)$", seat_id)
+                        if not col_match:
+                            continue
+                        col = int(col_match.group(1))
+                        
+                        # Get bounding box to deduplicate
+                        box = await el.bounding_box()
+                        if not box:
+                            continue
+                        
+                        dedupe_key = (seat_id, int(box["x"]), int(box["y"]))
+                        if dedupe_key in seen:
+                            continue
+                        seen.add(dedupe_key)
+                        
+                        # Check availability via class or aria attributes
+                        class_attr = (await el.get_attribute("class")) or ""
+                        status = "available"
+                        if any(token in class_attr.lower() for token in ["sold", "blocked", "unavailable", "taken", "booked"]):
+                            status = "sold"
+                        
+                        logger.debug(f"[seats] Found seat {seat_id} with status {status}")
+                        candidates.append({
+                            "id": seat_id,
+                            "row": row,
+                            "col": col,
+                            "category": None,
+                            "price": None,
+                            "status": status,
+                            "element": el,
+                        })
+                    except Exception:
+                        continue
+            else:
+                logger.debug(f"[seats] No row markers found in accessibility modal")
+        else:
+            logger.debug(f"[seats] NOT attempting accessibility scrape (category_selected={category_selected}, seat_candidates=0)")
+        
+        if candidates:
+            logger.info("[seats] Accessibility-grid fallback found %d seat(s).", len(candidates))
+        
+        # Close the modal after we're done scraping
+        await self._close_accessibility_modal(page)
+        return candidates
+
+    # ------------------------------------------------------------------
+    # _close_accessibility_modal — dismiss the accessibility UI
+    # ------------------------------------------------------------------
+
+    async def _close_accessibility_modal(self, page: "playwright.async_api.Page") -> None:
+        """Close the accessibility seat selection modal if it's open."""
+        try:
+            close_btn = page.get_by_role("button", name=re.compile(r"Close accessibility modal", re.IGNORECASE))
+            if await close_btn.count() and await close_btn.first.is_visible():
+                try:
+                    await close_btn.first.click()
+                    await page.wait_for_timeout(500)
+                    logger.debug("[seats] Closed accessibility modal.")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # _scrape_seat_categories_from_labels — canvas fallback
@@ -1912,6 +3377,9 @@ class BMSPlaywrightAutomator:
                 "Current URL: " + page.url
             )
 
+        await page.wait_for_timeout(1500)
+
+        await self._handle_region_popup(page, city=self.city)
         await page.wait_for_timeout(1500)
 
         # ------------------------------------------------------------------
@@ -2591,6 +4059,9 @@ class BMSPlaywrightAutomator:
                 "Current URL: " + page.url
             )
 
+        await page.wait_for_timeout(1500)
+
+        await self._handle_region_popup(page, city=self.city)
         await page.wait_for_timeout(1500)
 
         # ------------------------------------------------------------------

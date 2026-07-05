@@ -43,8 +43,13 @@ class SecureCredentialManager:
 
         # Email notification settings
         print("\n--- Notification Settings ---")
+        print("⚠️  Gmail requires an App Password, NOT your regular Gmail password.")
+        print("    Generate one at: https://myaccount.google.com/apppasswords")
+        print("    Select 'Mail' as the app and your device, then copy the 16-char code.")
         credentials['notification_email'] = input("Notification Email (can be same as above): ").strip()
-        credentials['email_app_password'] = getpass.getpass("Email App Password (for notifications): ")
+        credentials['email_app_password'] = getpass.getpass(
+            "Gmail App Password (NOT your regular Gmail password — generate one at https://myaccount.google.com/apppasswords): "
+        )
 
         # BMS Gift Card (optional, required for auto-payment)
         store_gift_card = input("\nStore BMS Gift Card for auto-payment? (y/n): ").lower() == 'y'

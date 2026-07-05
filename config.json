@@ -16,10 +16,10 @@
   "booking_requests": [
     {
       "id": "req_001",
-      "movie_name": "Coolie",
-      "date": "2025-08-15",
-      "preferred_time_range": ["evening"],
-      "cinemas": ["PVR Brookfields", "INOX Prozone"],
+      "movie_name": "Gatta Kusthi 2",
+      "date": "2026-07-06",
+      "preferred_time_range": ["morning"],
+      "cinemas": ["Broadway Cinemas"],
       "city": "Coimbatore",
       "max_price": 300,
       "priority": 1,
