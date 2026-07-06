@@ -71,10 +71,23 @@ class SecureCredentialManager:
         # Payment information (optional)
         store_payment = input("\nStore payment info? (y/n): ").lower() == 'y'
         if store_payment:
-            print("Payment Information (for faster checkout):")
-            credentials['card_number'] = getpass.getpass("Card Number (last 4 digits only): ")
-            credentials['cardholder_name'] = input("Cardholder Name: ")
-            # Note: Never store full card details or CVV
+            print("Payment Information (Debit/Credit Card):")
+            card_number = getpass.getpass("Card Number (16 digits): ").strip()
+            card_expiry = input("Card Expiry (MM/YY): ").strip()
+            card_cvv = getpass.getpass("Card CVV (3 digits): ").strip()
+            card_name = input("Cardholder Name (exactly as on card): ").strip()
+            if card_number:
+                credentials['card'] = {
+                    'number': card_number,
+                    'expiry': card_expiry,
+                    'cvv': card_cvv,
+                    'name': card_name,
+                }
+                print("✅ Card details stored.")
+            else:
+                print("⚠️  Card number was empty — card details NOT stored.")
+        else:
+            print("ℹ️  Card not stored — payment will require manual entry.")
         
         # Encrypt and save
         encrypted_data = self.fernet.encrypt(json.dumps(credentials).encode())

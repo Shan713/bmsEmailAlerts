@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -28,6 +29,13 @@ from booking_engine import (
     save_config,
 )
 from credential_manager import SecureCredentialManager
+
+# Optional: import AI agent for direct booking
+try:
+    from ai_booking_agent import AIBrowserBookingAgent
+    _AI_AVAILABLE = True
+except ImportError:
+    _AI_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -259,6 +267,7 @@ async def add_request(data: Dict[str, Any]):
         "priority": len(config.get("booking_requests", [])) + 1,
         "auto_book": data.get("auto_book", True),
         "status": "monitoring",
+        "movie_url": data.get("movie_url") or data.get("booking_url", None),
         "booking_url": data.get("booking_url", None),
         "payment_method": data.get("payment_method", "upi"),
         "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -272,6 +281,138 @@ async def add_request(data: Dict[str, Any]):
     except Exception as exc:
         _add_error(f"Failed to save config: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/book-ai/{request_id}")
+async def trigger_ai_booking(
+    request_id: str,
+    dry_run: bool = Query(False),
+    use_direct_url: bool = Query(True),
+):
+    """
+    Trigger an **AI-powered** booking for *request_id*.
+
+    Uses ``AIBrowserBookingAgent`` with DeepSeek.  Set ``?dry_run=true``
+    for a dry‑run.  Set ``?use_direct_url=false`` to use the full flow
+    (homepage → search) instead of the direct URL shortcut.
+    """
+    global is_booking_in_progress, current_booking_id, last_booking_result
+
+    if not _AI_AVAILABLE:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "AI agent not available. Install browser-use."},
+        )
+
+    if booking_lock.locked():
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "A booking is already in progress.",
+                "current_booking_id": current_booking_id,
+            },
+        )
+
+    async with booking_lock:
+        is_booking_in_progress = True
+        current_booking_id = request_id
+        try:
+            config = load_config()
+            request_data = next(
+                (r for r in config.get("booking_requests", [])
+                 if r.get("id") == request_id),
+                None,
+            )
+            if not request_data:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Request '{request_id}' not found.",
+                )
+
+            agent = AIBrowserBookingAgent(config)
+
+            if use_direct_url:
+                movie_url = request_data.get("movie_url") or request_data.get("booking_url")
+                if movie_url:
+                    # Build the booking URL from movie_url + date
+                    import re
+                    date_formatted = request_data["date"].replace("-", "")
+                    current_url = movie_url
+                    match = re.search(r'(ET\d+)', current_url)
+                    if match:
+                        et_code = match.group(1)
+                        # Extract city/slug from the URL
+                        parts = current_url.split("/")
+                        try:
+                            city_idx = parts.index("movies") + 1
+                            city = parts[city_idx]
+                            slug = parts[city_idx + 1]
+                            booking_url = (
+                                f"https://in.bookmyshow.com/movies/{city}/{slug}"
+                                f"/buytickets/{et_code}/{date_formatted}"
+                            )
+                        except (ValueError, IndexError):
+                            booking_url = current_url
+                    else:
+                        booking_url = current_url
+
+                    time_ranges = request_data.get("preferred_time_range", [])
+                    showtimes = config.get("user_profile", {}).get("preferred_showtimes", {})
+                    hours = []
+                    for key in time_ranges:
+                        for slot in showtimes.get(key, []):
+                            try:
+                                hours.append(int(slot.strip().split(":")[0]))
+                            except (ValueError, IndexError):
+                                pass
+                    time_window = (min(hours), max(hours) + 1) if hours else None
+
+                    logger.info(
+                        "[web-ai] Direct booking for %s: %s",
+                        request_id, booking_url,
+                    )
+
+                    result = await agent.execute_booking(
+                        request_id=request_id,
+                        booking_url=booking_url,
+                        movie_name=request_data["movie_name"],
+                        cinema=request_data.get("cinemas", [""])[0] if request_data.get("cinemas") else "",
+                        date=request_data["date"],
+                        city=request_data.get("city", "Coimbatore"),
+                        time_window=time_window,
+                        num_tickets=config.get("user_profile", {}).get("max_tickets", 2),
+                        dry_run=dry_run,
+                    )
+                else:
+                    logger.info(
+                        "[web-ai] No movie_url — using full flow for %s",
+                        request_id,
+                    )
+                    result = await agent.run(request_data, dry_run=dry_run)
+            else:
+                result = await agent.run(request_data, dry_run=dry_run)
+
+            last_booking_result = result
+
+            # Update status in config
+            try:
+                config = load_config()
+                for r in config.get("booking_requests", []):
+                    if r.get("id") == request_id:
+                        if result.get("success"):
+                            r["status"] = "booked"
+                        break
+                save_config(config)
+            except Exception as exc:
+                logger.warning("Could not update request status: %s", exc)
+
+            return result
+        except Exception as exc:
+            _add_error(f"AI booking {request_id} failed: {exc}")
+            raise HTTPException(status_code=500, detail=str(exc))
+        finally:
+            is_booking_in_progress = False
+            current_booking_id = None
 
 
 @app.delete("/api/delete-request/{request_id}")

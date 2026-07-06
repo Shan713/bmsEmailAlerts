@@ -1,23 +1,25 @@
-import undetected_chromedriver as uc
-from PIL import Image
-import pytesseract
-import smtplib
-from email.message import EmailMessage
-import time
+import asyncio
 import io
-import random
 import json
 import logging
-from datetime import datetime, timedelta
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-import schedule
-import threading
-from dataclasses import dataclass
-from typing import List, Dict, Optional
+import random
 import re
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+import pytesseract
+import schedule
+import smtplib
+import undetected_chromedriver as uc
+from email.message import EmailMessage
+from PIL import Image
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 # Configure logging
 logging.basicConfig(
@@ -44,6 +46,7 @@ class BookingRequest:
     auto_book: bool
     status: str
     created_at: str
+    movie_url: Optional[str] = None
 
 class MovieBookingAgent:
     def __init__(self, config_file='config.json'):
@@ -102,6 +105,7 @@ class MovieBookingAgent:
             'id': new_request.id,
             'movie_name': new_request.movie_name,
             'date': new_request.date,
+            'movie_url': new_request.movie_url,
             'preferred_time_range': new_request.preferred_time_range,
             'cinemas': new_request.cinemas,
             'city': new_request.city,
@@ -143,28 +147,41 @@ class MovieBookingAgent:
         self.driver.set_window_size(1920, 1080)
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     
-    def find_movie_url(self, movie_name, date, city):
-        """Find the booking URL for a specific movie"""
-        # This would typically involve searching BookMyShow
-        # For now, return a constructed URL based on patterns
+    def find_movie_url(self, movie_name, date, city, movie_url_override=None):
+        """Find the booking URL for a specific movie.
+
+        If ``movie_url_override`` is provided (from config), use it directly
+        — no slug‑guessing needed.  Otherwise fall back to constructing
+        URLs from the movie name.
+        """
+        # --- Direct URL from config (preferred) --------------------------
+        if movie_url_override:
+            logging.info(f"Using movie URL from config: {movie_url_override}")
+            if self.driver:
+                self.driver.get(movie_url_override)
+                time.sleep(3)
+                # The page may redirect — use the final URL
+                current = self.driver.current_url
+                logging.info(f"Final URL after navigation: {current}")
+                return current
+            return movie_url_override
+
+        # --- Fallback: guess slug from movie name ------------------------
         movie_slug = movie_name.lower().replace(' ', '-')
         date_formatted = date.replace('-', '')
-        
-        # Try to construct URL based on BookMyShow pattern
+
         search_urls = [
             f"https://in.bookmyshow.com/movies/{city.lower()}/{movie_slug}",
             f"https://in.bookmyshow.com/{city.lower()}/movies/{movie_slug}",
         ]
-        
+
         for url in search_urls:
             try:
                 if self.driver:
                     self.driver.get(url)
                     time.sleep(3)
-                    
-                    # Check if page loaded successfully
+
                     if "book tickets" in self.driver.page_source.lower():
-                        # Look for booking links with the specific date
                         booking_links = self.driver.find_elements(By.PARTIAL_LINK_TEXT, "Book")
                         for link in booking_links:
                             href = link.get_attribute('href')
@@ -173,7 +190,7 @@ class MovieBookingAgent:
             except Exception as e:
                 logging.warning(f"Error checking URL {url}: {e}")
                 continue
-        
+
         return None
     
     def check_availability(self, booking_url):
@@ -450,7 +467,61 @@ class MovieBookingAgent:
         except Exception as e:
             logging.error(f"Failed to send email: {e}")
     
-    def monitor_bookings(self):
+    def _extract_booking_url(self, current_url: str, target_date: str) -> Optional[str]:
+        """Extract or construct the direct booking URL from the current page.
+
+        Parameters
+        ----------
+        current_url : str
+            The current driver URL.
+        target_date : str
+            ``YYYY-MM-DD`` date to inject into the URL.
+
+        Returns
+        -------
+        str or None
+            The full booking URL, or ``None`` if the current URL pattern
+            doesn't match any known format.
+        """
+        # Already on a buytickets page?
+        match = re.search(
+            r'/movies/([^/]+)/([^/]+)/buytickets/(ET\d+)/(\d{8})',
+            current_url,
+        )
+        if match:
+            return current_url
+
+        # On a movie page with ET code: /movies/{city}/{slug}/{ET}
+        match = re.search(
+            r'/movies/([^/]+)/([^/]+)/(ET\d+)',
+            current_url,
+        )
+        if match:
+            city, slug, et_code = match.groups()
+            date_formatted = target_date.replace('-', '')
+            return (
+                f"https://in.bookmyshow.com/movies/{city}/{slug}"
+                f"/buytickets/{et_code}/{date_formatted}"
+            )
+
+        # Try to find any ET code in the page source
+        try:
+            source = self.driver.page_source
+            match = re.search(r'(ET\d+)', source)
+            if match:
+                et_code = match.group(1)
+                movie_slug = (
+                    target_date.replace('-', '')  # fallback — won't be right
+                )
+                logging.warning(
+                    "Partial URL extraction — ET code: %s, "
+                    "but couldn't determine city/slug.", et_code
+                )
+            return None
+        except Exception:
+            return None
+
+    def monitor_bookings(self, use_ai_bridge: bool = True):
         """Monitor all active booking requests"""
         logging.info("Starting booking monitor...")
         
@@ -473,13 +544,112 @@ class MovieBookingAgent:
                     logging.info(f"Request {request.id} expired")
                     continue
                 
-                # Attempt booking
-                success = self.book_tickets(request)
-                
-                if success:
-                    request.status = 'booking_initiated'
-                    self.send_booking_notification(request, "Booking initiated successfully!")
-                
+                # --- AI Bridge path (when auto_book enabled) -----------------
+                if use_ai_bridge and request.auto_book:
+                    logging.info(
+                        f"[{request.id}] auto_book enabled — using AI bridge."
+                    )
+                    try:
+                        movie_url = self.find_movie_url(
+                            request.movie_name,
+                            request.date,
+                            request.city,
+                            movie_url_override=getattr(request, 'movie_url', None),
+                        )
+                        if not movie_url:
+                            logging.warning(
+                                f"[{request.id}] Could not find movie URL."
+                            )
+                            continue
+
+                        booking_url = self._extract_booking_url(
+                            movie_url, request.date
+                        )
+                        if not booking_url:
+                            logging.warning(
+                                f"[{request.id}] Could not extract booking URL "
+                                f"from {movie_url}"
+                            )
+                            continue
+
+                        if not self.check_availability(booking_url):
+                            logging.info(
+                                f"[{request.id}] Not available yet."
+                            )
+                            continue
+
+                        # Extract time window from request
+                        time_ranges = request.preferred_time_range
+                        window: tuple[int, int] | None = None
+                        if time_ranges:
+                            showtimes = (
+                                self.config.get("user_profile", {})
+                                .get("preferred_showtimes", {})
+                            )
+                            hours = []
+                            for key in time_ranges:
+                                for slot in showtimes.get(key, []):
+                                    try:
+                                        h = int(slot.strip().split(":")[0])
+                                        hours.append(h)
+                                    except (ValueError, IndexError):
+                                        pass
+                            if hours:
+                                window = (min(hours), max(hours) + 1)
+
+                        alert_data = {
+                            "movie_name": request.movie_name,
+                            "cinema": request.cinemas[0] if request.cinemas else "",
+                            "date": request.date,
+                            "booking_url": booking_url,
+                            "unique_code": (
+                                "ET" + booking_url.split("ET")[-1][:8]
+                                if "ET" in booking_url else ""
+                            ),
+                            "time_window": window,
+                            "num_tickets": self.config.get("user_profile", {}).get("max_tickets", 2),
+                            "city": request.city,
+                        }
+
+                        logging.info(
+                            "[%s] 🎯 Triggering AI agent via bridge: %s",
+                            request.id, booking_url,
+                        )
+
+                        # The monitor runs in a thread — run async bridge
+                        from alert_to_agent import AlertToAgentBridge
+                        bridge = AlertToAgentBridge(self.config)
+
+                        result = asyncio.run(
+                            bridge.on_booking_detected(alert_data)
+                        )
+
+                        if result and result.get("success"):
+                            request.status = 'booked'
+                            self.send_booking_notification(
+                                request, "✅ AI agent booking successful!"
+                            )
+                        else:
+                            request.status = 'booking_failed'
+                            self.send_booking_notification(
+                                request,
+                                f"❌ AI booking failed: {result.get('error') if result else 'no result'}",
+                            )
+                    except Exception as e:
+                        logging.error(
+                            "[%s] AI bridge error: %s", request.id, e
+                        )
+                        request.status = 'booking_failed'
+
+                # --- Legacy path (no auto_book or bridge disabled) ----------
+                else:
+                    success = self.book_tickets(request)
+                    if success:
+                        request.status = 'booking_initiated'
+                        self.send_booking_notification(
+                            request, "Booking initiated successfully!"
+                        )
+
                 # Add delay between requests
                 time.sleep(random.uniform(10, 20))
                 

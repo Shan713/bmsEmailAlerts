@@ -72,6 +72,12 @@ async def main() -> None:
         action="store_true",
         help="Stop before clicking 'Pay Now' (test the full pipeline).",
     )
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        help="Use AI-powered browser agent (browser-use) instead of "
+        "hardcoded Playwright selectors.",
+    )
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -145,7 +151,25 @@ async def main() -> None:
     for request in selected:
         req_id = request.get("id", "?")
         logger.info("🚀 Triggering booking for request %s …", req_id)
-        result = await execute_booking(req_id, dry_run=args.dry_run)
+
+        if args.ai:
+            # --- AI-powered agent ----------------------------------------
+            from ai_booking_agent import AIBrowserBookingAgent
+
+            try:
+                ai_agent = AIBrowserBookingAgent(config)
+            except RuntimeError as exc:
+                logger.error("❌ Cannot initialize AI agent: %s", exc)
+                logger.error(
+                    "   Set ANTHROPIC_API_KEY or DEEPSEEK_API_KEY in "
+                    "your environment."
+                )
+                sys.exit(1)
+            result = await ai_agent.run(request, dry_run=args.dry_run)
+        else:
+            # --- Classic Playwright agent --------------------------------
+            result = await execute_booking(req_id, dry_run=args.dry_run)
+
         results.append(result)
 
     # ------------------------------------------------------------------
