@@ -178,31 +178,29 @@ async def check_booking_page(
 # Main watch loop
 # ---------------------------------------------------------------------------
 
-async def watch_requests(
+def _build_watch_list(
+    config: dict[str, Any],
     request_ids: Optional[List[str]] = None,
-    interval: int = 60,
-    once: bool = False,
-    headless: bool = False,
-) -> None:
+) -> list[dict[str, Any]]:
     """
-    Watch all (or specific) booking requests and auto-book when live.
+    Build a list of watchable requests from *config*.
 
     Parameters
     ----------
-    request_ids : list[str] | None
-        Specific request IDs to watch.  ``None`` = all monitoring requests.
-    interval : int
-        Seconds between checks (default 60).
-    once : bool
-        Check once and exit.
-    headless : bool
-        Run the checker browser in headless mode.
-    """
-    config = load_config()
-    all_requests: list[dict[str, Any]] = config.get("booking_requests", [])
+    config : dict
+        Parsed ``config.json``.
+    request_ids : list[str] or None
+        If provided, only return requests whose ID is in this list.
+        ``None`` = all eligible requests.
 
-    # --- Build the watch list -------------------------------------------
+    Returns
+    -------
+    list[dict]
+        Each dict has the booking-request fields plus a ``booking_url`` key.
+    """
+    all_requests: list[dict[str, Any]] = config.get("booking_requests", [])
     to_watch: list[dict[str, Any]] = []
+
     for req in all_requests:
         rid = req.get("id", "")
 
@@ -211,7 +209,6 @@ async def watch_requests(
         if req.get("status") not in ("monitoring", "active"):
             continue
         if not req.get("auto_book"):
-            logger.info("[%s] auto_book disabled — skipping.", rid)
             continue
 
         movie_url = req.get("movie_url")
@@ -230,23 +227,147 @@ async def watch_requests(
 
         to_watch.append({**req, "booking_url": booking_url})
 
+    return to_watch
+
+
+async def _trigger_ai_booking(
+    config: dict[str, Any],
+    req: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """
+    Launch the AI booking agent for a detected cinema match.
+
+    Parameters
+    ----------
+    config : dict
+        Freshly-loaded ``config.json`` (so user_profile is current).
+    req : dict
+        A watch-list entry with ``booking_url``, ``movie_name``, etc.
+
+    Returns
+    -------
+    dict or None
+        The agent's result dict, or ``None`` on fatal error.
+    """
+    rid = req["id"]
+    logger.info("[%s] 🤖 Launching AI booking agent…", rid)
+
+    from ai_booking_agent import AIBrowserBookingAgent
+
+    # Build time window
+    time_ranges = req.get("preferred_time_range", [])
+    showtimes = (
+        config.get("user_profile", {})
+        .get("preferred_showtimes", {})
+    )
+    hours: list[int] = []
+    for key in time_ranges:
+        for slot in showtimes.get(key, []):
+            try:
+                hours.append(int(slot.strip().split(":")[0]))
+            except (ValueError, IndexError):
+                pass
+    time_window = (min(hours), max(hours) + 1) if hours else None
+
+    agent = AIBrowserBookingAgent(config)
+    result = await agent.execute_booking(
+        request_id=rid,
+        booking_url=req["booking_url"],
+        movie_name=req["movie_name"],
+        cinema=(
+            req.get("cinemas", [""])[0]
+            if req.get("cinemas") else ""
+        ),
+        date=req["date"],
+        city=req.get("city", "Coimbatore"),
+        time_window=time_window,
+        num_tickets=(
+            config.get("user_profile", {})
+            .get("max_tickets", 2)
+        ),
+        dry_run=False,
+    )
+
+    if result and result.get("success"):
+        logger.info("✅ [%s] BOOKING SUCCESSFUL!", rid)
+        # Persist status to config
+        try:
+            fresh = load_config()
+            for r in fresh.get("booking_requests", []):
+                if r.get("id") == rid:
+                    r["status"] = "booked"
+                    break
+            save_config(fresh)
+        except Exception as exc:
+            logger.warning("Could not update config status: %s", exc)
+    else:
+        error = result.get("error") if result else "no result"
+        logger.error("❌ [%s] AI booking failed: %s", rid, error)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Main watch loop
+# ---------------------------------------------------------------------------
+
+async def watch_requests(
+    request_ids: Optional[List[str]] = None,
+    interval: int = 60,
+    once: bool = False,
+    headless: bool = False,
+) -> None:
+    """
+    Watch all (or specific) booking requests and auto-book when live.
+
+    Re-reads ``config.json`` on every polling cycle so that newly-added
+    requests are picked up without restarting the watcher.
+
+    Parameters
+    ----------
+    request_ids : list[str] | None
+        Specific request IDs to watch.  ``None`` = all monitoring requests.
+    interval : int
+        Seconds between checks (default 60).
+    once : bool
+        Check once and exit.
+    headless : bool
+        Run the checker browser in headless mode.
+    """
+    config = load_config()
+    to_watch: list[dict[str, Any]] = _build_watch_list(config, request_ids)
+
     if not to_watch:
         logger.info(
             "No requests to watch.  Add a request with 'auto_book: true' "
             "and 'movie_url' set in config.json."
         )
-        return
-
-    logger.info("👀 Watching %d request(s):", len(to_watch))
-    for w in to_watch:
+        if once:
+            return
         logger.info(
-            "    [%s] %s — %s (%s) → %s",
-            w["id"], w["movie_name"], w["date"],
-            ", ".join(w.get("cinemas", [])),
-            w["booking_url"],
+            "👀 Will keep polling config.json every %ds for new requests…",
+            interval,
         )
 
-    booked: set[str] = set()
+    # Track request IDs we already know about, plus completed bookings.
+    known_ids: set[str] = {r["id"] for r in to_watch}
+    booked_ids: set[str] = set()
+
+    def _log_watch_list() -> None:
+        if not to_watch:
+            logger.info("   (no requests currently being watched)")
+            return
+        logger.info("👀 Watching %d request(s):", len(to_watch))
+        for w in to_watch:
+            tag = " ✅" if w["id"] in booked_ids else ""
+            logger.info(
+                "    [%s] %s — %s (%s)%s",
+                w["id"], w["movie_name"], w["date"],
+                ", ".join(w.get("cinemas", [])),
+                tag,
+            )
+
+    _log_watch_list()
 
     # --- Import Playwright ----------------------------------------------
     from playwright.async_api import async_playwright
@@ -256,10 +377,51 @@ async def watch_requests(
 
         try:
             while True:
+                # ── Reload config to pick up new / updated requests ────
+                fresh_config = load_config()
+                fresh_watch = _build_watch_list(fresh_config, request_ids)
+
+                # Check for requests that changed status to "booked"
+                # externally (e.g. via web dashboard).
+                for r in fresh_config.get("booking_requests", []):
+                    rid = r.get("id", "")
+                    if rid in known_ids and r.get("status") == "booked":
+                        booked_ids.add(rid)
+
+                # Merge in NEW requests we haven't seen before.
+                for nw in fresh_watch:
+                    if nw["id"] not in known_ids:
+                        known_ids.add(nw["id"])
+                        to_watch.append(nw)
+                        logger.info(
+                            "🆕 [%s] New request picked up: %s at %s on %s",
+                            nw["id"], nw["movie_name"],
+                            ", ".join(nw.get("cinemas", [])), nw["date"],
+                        )
+
+                # Remove requests that are no longer in monitoring/active
+                # status (e.g. user deleted them or marked them inactive).
+                fresh_ids = {r["id"] for r in fresh_watch}
+                removed = [r for r in to_watch if r["id"] not in fresh_ids]
+                for rem in removed:
+                    logger.info(
+                        "🗑️  [%s] Request removed from watch (status changed).",
+                        rem["id"],
+                    )
+                    to_watch.remove(rem)
+                    known_ids.discard(rem["id"])
+
+                # Also mark as booked any that appear as booked in fresh config.
+                for r in fresh_config.get("booking_requests", []):
+                    rid = r.get("id", "")
+                    if rid in known_ids and r.get("status") == "booked":
+                        booked_ids.add(rid)
+
+                # ── Check each watched request ─────────────────────────
                 for req in to_watch:
                     rid = req["id"]
 
-                    if rid in booked:
+                    if rid in booked_ids:
                         continue
 
                     logger.info("-" * 50)
@@ -290,76 +452,11 @@ async def watch_requests(
                                 "🎯 [%s] BOOKINGS ARE LIVE! Cinemas: %s",
                                 rid, check["found_cinemas"],
                             )
-
-                            # ── TRIGGER AI AGENT ────────────────────
-                            logger.info(
-                                "[%s] 🤖 Launching AI booking agent…", rid
+                            result = await _trigger_ai_booking(
+                                fresh_config, req,
                             )
-
-                            from ai_booking_agent import AIBrowserBookingAgent
-
-                            # Build time window
-                            time_ranges = req.get("preferred_time_range", [])
-                            showtimes = (
-                                config.get("user_profile", {})
-                                .get("preferred_showtimes", {})
-                            )
-                            hours: list[int] = []
-                            for key in time_ranges:
-                                for slot in showtimes.get(key, []):
-                                    try:
-                                        hours.append(
-                                            int(slot.strip().split(":")[0])
-                                        )
-                                    except (ValueError, IndexError):
-                                        pass
-                            time_window = (
-                                (min(hours), max(hours) + 1) if hours else None
-                            )
-
-                            agent = AIBrowserBookingAgent(config)
-                            result = await agent.execute_booking(
-                                request_id=rid,
-                                booking_url=req["booking_url"],
-                                movie_name=req["movie_name"],
-                                cinema=(
-                                    req.get("cinemas", [""])[0]
-                                    if req.get("cinemas") else ""
-                                ),
-                                date=req["date"],
-                                city=req.get("city", "Coimbatore"),
-                                time_window=time_window,
-                                num_tickets=(
-                                    config.get("user_profile", {})
-                                    .get("max_tickets", 2)
-                                ),
-                                dry_run=False,
-                            )
-
                             if result and result.get("success"):
-                                logger.info("✅ [%s] BOOKING SUCCESSFUL!", rid)
-                                booked.add(rid)
-
-                                # Persist status
-                                try:
-                                    fresh = load_config()
-                                    for r in fresh.get("booking_requests", []):
-                                        if r.get("id") == rid:
-                                            r["status"] = "booked"
-                                            break
-                                    save_config(fresh)
-                                except Exception as exc:
-                                    logger.warning(
-                                        "Could not update config status: %s",
-                                        exc,
-                                    )
-                            else:
-                                error = (
-                                    result.get("error") if result else "no result"
-                                )
-                                logger.error(
-                                    "❌ [%s] AI booking failed: %s", rid, error,
-                                )
+                                booked_ids.add(rid)
                         else:
                             logger.info("[%s] Not available yet.", rid)
 
@@ -371,16 +468,23 @@ async def watch_requests(
                     logger.info("--once mode — exiting.")
                     break
 
-                if len(booked) >= len(to_watch):
-                    logger.info("✅ All watched requests have been booked!")
-                    break
-
-                remaining = [r for r in to_watch if r["id"] not in booked]
-                logger.info(
-                    "⏳ Waiting %ds before next check "
-                    "(%d request(s) remaining)…",
-                    interval, len(remaining),
-                )
+                pending = [
+                    r for r in to_watch if r["id"] not in booked_ids
+                ]
+                if pending:
+                    logger.info(
+                        "⏳ Waiting %ds before next check "
+                        "(%d request(s) remaining)…",
+                        interval, len(pending),
+                    )
+                else:
+                    # Everything we know about is booked — but keep polling
+                    # config in case new requests are added.
+                    logger.info(
+                        "⏳ All known requests booked. "
+                        "Polling config every %ds for new requests…",
+                        interval,
+                    )
                 await asyncio.sleep(interval)
 
         finally:

@@ -34,7 +34,19 @@ from browser_use.llm.deepseek.chat import ChatDeepSeek
 
 from credential_manager import SecureCredentialManager
 
+try:
+    from otp_relay import EmailOTPRelay
+    _OTP_AVAILABLE = True
+except ImportError:
+    _OTP_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# CDP URL for reconnecting to the browser-use managed Chrome instance.
+# browser-use opens Chrome with this debugging port so that the OTP relay
+# can connect via Playwright's connect_over_cdp and fill the OTP field
+# after the main agent task has completed.
+_BMS_CDP_URL = "http://127.0.0.1:9222"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -113,6 +125,7 @@ class AIBrowserBookingAgent:
         self.config = config
         self.credentials_file = credentials_file
         self._credentials: Optional[dict[str, Any]] = None
+        self._browser_session: Any = None
 
         # --- Resolve LLM -------------------------------------------------
         self.llm = self._build_llm()
@@ -710,6 +723,8 @@ REMINDERS: Shadow DOM dropdowns = dropdown_options(). Shadow DOM inputs = input_
         try:
             logger.info("[ai:%s] 🚀 Starting browser-use agent …", request_id)
             history = await agent.run()
+            # Keep the browser session alive — the OTP page is still open
+            self._browser_session = agent.browser_session
             final = history.final_result()
             logger.info("[ai:%s] ✅ Agent finished. Final result: %s",
                         request_id, final[:500] if final else "(none)")
@@ -720,6 +735,7 @@ REMINDERS: Shadow DOM dropdowns = dropdown_options(). Shadow DOM inputs = input_
         screenshot_path = await self._save_final_screenshot(request_id)
 
         if error_msg:
+            await self._close_browser_session(request_id)
             return self._build_error_result(
                 request_id, movie_name, error_msg, dry_run,
             )
@@ -728,6 +744,7 @@ REMINDERS: Shadow DOM dropdowns = dropdown_options(). Shadow DOM inputs = input_
 
         if dry_run:
             logger.info("[ai:%s] 🔍 Dry‑run complete.", request_id)
+            await self._close_browser_session(request_id)
             return {
                 "request_id": request_id,
                 "movie_name": movie_name,
@@ -742,6 +759,16 @@ REMINDERS: Shadow DOM dropdowns = dropdown_options(). Shadow DOM inputs = input_
                 "dry_run": True,
             }
 
+        # --- OTP detection & auto-fill ------------------------------------
+        otp_filled = False
+        if self._needs_otp(final_text):
+            logger.info("[ai:%s] 🔐 OTP page detected — attempting auto-fill…", request_id)
+            otp_filled = await self._auto_fill_otp(request_id)
+
+        # --- Close browser session -----------------------------------------
+        await self._close_browser_session(request_id)
+
+        # --- Determine success --------------------------------------------
         success = any(
             kw in (final_text or "").lower()
             for kw in ("confirmed", "successful", "booking", "thank you")
@@ -756,9 +783,326 @@ REMINDERS: Shadow DOM dropdowns = dropdown_options(). Shadow DOM inputs = input_
             "seats": None,
             "total_paid": None,
             "screenshot": screenshot_path,
-            "error": None if success else "Could not confirm booking success.",
+            "error": (
+                None if success
+                else ("OTP auto-filled — check result" if otp_filled
+                      else "Could not confirm booking success.")
+            ),
             "dry_run": False,
         }
+
+    # ------------------------------------------------------------------
+    # OTP detection & auto-fill
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _needs_otp(final_text: str) -> bool:
+        """
+        Check whether the agent's final result indicates an OTP is needed.
+
+        The main agent is instructed to report::
+
+            "Card details submitted. Waiting for OTP page."
+
+        or similar when it reaches the bank verification step.
+        """
+        if not final_text:
+            return False
+        text_lower = final_text.lower()
+        otp_keywords = ["otp", "verify", "verification", "one time password",
+                        "enter the code", "authentication"]
+        return any(kw in text_lower for kw in otp_keywords)
+
+    async def _auto_fill_otp(self, request_id: str) -> bool:
+        """
+        Poll email for bank OTP and run a short follow-up agent to fill it.
+
+        Returns ``True`` if the OTP was found and filling was attempted,
+        ``False`` otherwise.
+        """
+        # --- Check OTP relay configuration --------------------------------
+        try:
+            creds = self._load_credentials()
+        except RuntimeError:
+            logger.warning("[ai:%s] No credentials — cannot auto-fill OTP.", request_id)
+            return False
+
+        otp_config = creds.get("otp_relay")
+        if not otp_config or not otp_config.get("email") or not otp_config.get("app_password"):
+            logger.warning(
+                "[ai:%s] ⚠️  OTP relay not configured. "
+                "Run 'python setup_creds.py' to set it up. "
+                "Waiting 120s for manual OTP entry…",
+                request_id,
+            )
+            # Give the user 120 seconds to manually enter OTP
+            await asyncio.sleep(120)
+            return False
+
+        if not _OTP_AVAILABLE:
+            logger.error("[ai:%s] ❌ otp_relay module not available.", request_id)
+            return False
+
+        # --- Poll email for OTP ------------------------------------------
+        logger.info(
+            "[ai:%s] 📬 Starting email OTP relay: %s",
+            request_id, otp_config["email"],
+        )
+        relay = EmailOTPRelay(
+            email_addr=otp_config["email"],
+            app_password=otp_config["app_password"],
+        )
+        otp = relay.poll_for_otp(timeout=120, interval=5)
+
+        if not otp:
+            logger.warning(
+                "[ai:%s] ⏰ No OTP received via email within 120s. "
+                "The user may need to enter it manually.",
+                request_id,
+            )
+            # Give 60 more seconds for manual entry
+            await asyncio.sleep(60)
+            return False
+
+        logger.info("[ai:%s] 📩 OTP received: %s", request_id, otp)
+
+        # --- Get the EXISTING page — try multiple approaches -----------
+        # browser-use closes its CDP session after agent.run(), so
+        # get_current_page() may return None.  We use fallbacks to reach
+        # the still-open Chrome tab.
+        page = None
+
+        # Method 1: Get from browser_session's CDP session --------------
+        try:
+            cdp_session = getattr(self._browser_session, 'cdp_client', None)
+            if cdp_session is not None and hasattr(cdp_session, '_page'):
+                page = cdp_session._page
+                logger.info(
+                    "[ai:%s] 📱 Got page via CDP session", request_id,
+                )
+        except Exception as exc:
+            logger.debug("[ai:%s] Method 1 failed: %s", request_id, exc)
+
+        # Method 2: Get from the Playwright browser context -------------
+        if page is None:
+            try:
+                browser = getattr(self._browser_session, '_browser', None)
+                if browser is not None:
+                    contexts = getattr(browser, 'contexts', [])
+                    if contexts:
+                        pages = getattr(contexts[0], 'pages', [])
+                        if pages:
+                            page = pages[-1]  # last active page
+                            logger.info(
+                                "[ai:%s] 📱 Got page via browser context: %s",
+                                request_id,
+                                getattr(page, 'url', 'unknown'),
+                            )
+            except Exception as exc:
+                logger.debug("[ai:%s] Method 2 failed: %s", request_id, exc)
+
+        # Method 3: Connect via CDP URL ---------------------------------
+        if page is None:
+            try:
+                cdp_url = getattr(self._browser_session, '_cdp_url', None)
+                if cdp_url:
+                    from playwright.async_api import async_playwright as _async_pw
+                    pw_instance = await _async_pw().start()
+                    cdp_browser = await pw_instance.chromium.connect_over_cdp(cdp_url)
+                    cdp_contexts = cdp_browser.contexts
+                    if cdp_contexts:
+                        cdp_pages = cdp_contexts[0].pages
+                        if cdp_pages:
+                            page = cdp_pages[-1]
+                            logger.info(
+                                "[ai:%s] 📱 Got page via CDP connection: %s",
+                                request_id,
+                                getattr(page, 'url', 'unknown'),
+                            )
+            except Exception as exc:
+                logger.debug("[ai:%s] Method 3 failed: %s", request_id, exc)
+
+        # Method 4: Start a mini agent to resurrect the session ----------
+        if page is None:
+            try:
+                from browser_use import Agent as MiniAgent
+                mini_task = (
+                    "Report the current page URL. Do NOT navigate anywhere."
+                )
+                mini_agent = MiniAgent(task=mini_task, llm=self.llm)
+                await mini_agent.browser_session.start()
+                page = await mini_agent.browser_session.get_current_page()
+                if page is not None:
+                    logger.info(
+                        "[ai:%s] 📱 Got page via mini-agent: %s",
+                        request_id,
+                        getattr(page, 'url', 'None'),
+                    )
+            except Exception as exc:
+                logger.debug("[ai:%s] Method 4 failed: %s", request_id, exc)
+
+        # --- Bail if no page -----------------------------------------------
+        if page is None:
+            logger.error(
+                "[ai:%s] ❌ Could not access browser page. OTP fill failed.",
+                request_id,
+            )
+            return False
+
+        # --- Fill OTP directly via JavaScript --------------------------
+        try:
+            logger.info(
+                "[ai:%s] 📱 Filling OTP directly on current page: %s",
+                request_id, otp,
+            )
+
+            # Check current URL (useful for debugging bank redirects)
+            try:
+                current_url = await page.evaluate("window.location.href")
+                logger.info(
+                    "[ai:%s] 📱 Current page URL: %s", request_id, current_url,
+                )
+                if any(kw in current_url.lower()
+                       for kw in ('bank', 'secure', 'acs', '3ds')):
+                    logger.info(
+                        "[ai:%s] 📱 Detected bank 3D Secure page — "
+                        "looking for OTP input...", request_id,
+                    )
+            except Exception as exc:
+                logger.debug("[ai:%s] URL check failed: %s", request_id, exc)
+
+            # Let the page stabilise
+            await page.wait_for_timeout(3000)
+
+            # Step 1: Find and fill the OTP input via JavaScript ---------
+            filled = await page.evaluate(f"""
+                (function() {{
+                    // Check main document inputs
+                    var inputs = document.querySelectorAll('input');
+                    for (var i = 0; i < inputs.length; i++) {{
+                        var inp = inputs[i];
+                        if (inp.type === 'password' || inp.type === 'text' ||
+                            inp.type === 'number' || inp.inputMode === 'numeric') {{
+                            if (inp.offsetParent !== null) {{
+                                inp.focus();
+                                inp.value = '{otp}';
+                                inp.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                inp.dispatchEvent(new Event('change', {{bubbles: true}}));
+                                return 'filled: ' + inp.type;
+                            }}
+                        }}
+                    }}
+                    // Check iframes (common for 3D Secure bank pages)
+                    var iframes = document.querySelectorAll('iframe');
+                    for (var j = 0; j < iframes.length; j++) {{
+                        try {{
+                            var doc = iframes[j].contentDocument ||
+                                      iframes[j].contentWindow.document;
+                            var frameInputs = doc.querySelectorAll('input');
+                            for (var k = 0; k < frameInputs.length; k++) {{
+                                var fInp = frameInputs[k];
+                                if (fInp.offsetParent !== null &&
+                                    (fInp.type === 'password' ||
+                                     fInp.type === 'text' ||
+                                     fInp.type === 'number')) {{
+                                    fInp.focus();
+                                    fInp.value = '{otp}';
+                                    fInp.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                    return 'filled in iframe';
+                                }}
+                            }}
+                        }} catch(e) {{}}
+                    }}
+                    return 'no input found';
+                }})()
+            """)
+            logger.info(
+                "[ai:%s] 📱 JS fill result: %s", request_id, filled,
+            )
+
+            # Step 2: Click Submit/Verify via JavaScript ------------------
+            await page.wait_for_timeout(500)
+            clicked = await page.evaluate("""
+                (function() {
+                    var buttons = document.querySelectorAll(
+                        'button, input[type="submit"]'
+                    );
+                    for (var i = 0; i < buttons.length; i++) {
+                        var btn = buttons[i];
+                        var text = (btn.textContent || btn.value || '')
+                                   .toLowerCase();
+                        if (text.indexOf('submit') >= 0 ||
+                            text.indexOf('verify') >= 0 ||
+                            text.indexOf('confirm') >= 0 ||
+                            text.indexOf('pay') >= 0 ||
+                            text.indexOf('continue') >= 0) {
+                            if (btn.offsetParent !== null) {
+                                btn.click();
+                                return 'clicked: ' + text.substring(0, 30);
+                            }
+                        }
+                    }
+                    return 'no button found';
+                })()
+            """)
+            logger.info(
+                "[ai:%s] 📱 Submit click result: %s", request_id, clicked,
+            )
+
+            # Step 3: Wait for confirmation --------------------------------
+            await page.wait_for_timeout(5000)
+
+            # Step 4: Save confirmation screenshot --------------------------
+            os.makedirs("screenshots", exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = (
+                f"screenshots/booking_confirm_{request_id}_{ts}.png"
+            )
+            await page.screenshot(path=screenshot_path)
+            logger.info(
+                "[ai:%s] 📱 Confirmation screenshot saved: %s",
+                request_id, screenshot_path,
+            )
+
+            # Step 5: Check for success ------------------------------------
+            page_content = await page.content()
+            success_keywords = [
+                "booking confirmed", "successful", "ticket",
+                "booking id", "thank you", "payment successful",
+            ]
+            if any(kw in page_content.lower() for kw in success_keywords):
+                logger.info(
+                    "[ai:%s] ✅ OTP submitted — booking appears confirmed!",
+                    request_id,
+                )
+            else:
+                logger.warning(
+                    "[ai:%s] ⚠️  OTP submitted but could not confirm status.",
+                    request_id,
+                )
+
+            return True
+
+        except Exception as exc:
+            logger.error(
+                "[ai:%s] ❌ Direct OTP fill failed: %s", request_id, exc,
+            )
+            return False
+
+    async def _close_browser_session(self, request_id: str) -> None:
+        """Close the browser session if it's still open."""
+        if self._browser_session is None:
+            return
+        try:
+            await self._browser_session.close()
+            logger.info("[ai:%s] 🧹 Browser session closed.", request_id)
+        except Exception as exc:
+            logger.warning(
+                "[ai:%s] ⚠️  Error closing browser session: %s",
+                request_id, exc,
+            )
+        finally:
+            self._browser_session = None
 
     @staticmethod
     def _build_error_result(

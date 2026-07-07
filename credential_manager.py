@@ -51,6 +51,47 @@ class SecureCredentialManager:
             "Gmail App Password (NOT your regular Gmail password — generate one at https://myaccount.google.com/apppasswords): "
         )
 
+        # OTP Relay (for fully autonomous booking)
+        print("\n--- OTP Relay Settings (for hands-free OTP filling) ---")
+        print("Architecture: Bank OTP SMS → iOS Shortcut → forwards to Gmail")
+        print("              → AI agent polls this inbox → extracts OTP → fills it")
+        print("⚠️  This inbox is monitored continuously during booking for OTPs.")
+        setup_otp = input("Configure OTP email relay? (y/n): ").lower() == 'y'
+        if setup_otp:
+            # Try to reuse notification email if already set
+            notif_email = credentials.get('notification_email', '')
+            default_otp_email = notif_email or email
+            otp_email = input(f"OTP Relay Gmail address [{default_otp_email}]: ").strip()
+            if not otp_email:
+                otp_email = default_otp_email
+
+            # Try to reuse email_app_password if already set
+            default_app_pw = credentials.get('email_app_password', '')
+            if default_app_pw:
+                otp_app_pw = getpass.getpass(
+                    f"Gmail App Password for {otp_email} [reuse existing]: "
+                ).strip()
+                if not otp_app_pw:
+                    otp_app_pw = default_app_pw
+            else:
+                print("Generate at: https://myaccount.google.com/apppasswords")
+                print("Select 'Mail' as the app, then copy the 16-char code.")
+                otp_app_pw = getpass.getpass(
+                    f"Gmail App Password for {otp_email}: "
+                ).strip()
+
+            if otp_email and otp_app_pw:
+                credentials['otp_relay'] = {
+                    'email': otp_email,
+                    'app_password': otp_app_pw,
+                }
+                print(f"✅ OTP relay configured: {otp_email}")
+            else:
+                print("⚠️  Missing email or password — OTP relay NOT stored.")
+        else:
+            print("ℹ️  OTP relay not configured. "
+                  "You'll need to enter OTPs manually during booking.")
+
         # BMS Gift Card (optional, required for auto-payment)
         store_gift_card = input("\nStore BMS Gift Card for auto-payment? (y/n): ").lower() == 'y'
         if store_gift_card:

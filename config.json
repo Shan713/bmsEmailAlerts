@@ -46,20 +46,41 @@
       "id": "req_001",
       "movie_name": "Gatta Kusthi 2",
       "date": "2026-07-07",
-      "movie_url": "https://in.bookmyshow.com/movies/coimbatore/gatta-kusthi-2/ET00502802",
       "preferred_time_range": [
         "morning"
       ],
       "cinemas": [
         "Broadway Cinemas"
       ],
-      "city": "Coimbatore",
-      "max_price": 300,
+      "city": "",
+      "max_price": 0,
       "priority": 1,
       "auto_book": true,
       "status": "booked",
+      "movie_url": "https://in.bookmyshow.com/movies/coimbatore/gatta-kusthi-2/ET00502802",
+      "booking_url": null,
       "payment_method": "upi",
-      "created_at": "2025-02-02T10:00:00Z"
+      "created_at": "2026-07-06T17:43:05Z"
+    },
+    {
+      "id": "req_002",
+      "movie_name": "Idhayam Murali",
+      "date": "2026-07-12",
+      "preferred_time_range": [
+        "morning"
+      ],
+      "cinemas": [
+        "PVR Brookfields"
+      ],
+      "city": "",
+      "max_price": 0,
+      "priority": 2,
+      "auto_book": true,
+      "status": "monitoring",
+      "movie_url": "https://in.bookmyshow.com/movies/coimbatore/idhayam-murali/ET00442409",
+      "booking_url": null,
+      "payment_method": "upi",
+      "created_at": "2026-07-06T22:44:46Z"
     }
   ],
   "cinema_database": {
