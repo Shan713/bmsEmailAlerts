@@ -9,22 +9,30 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #f5f5f0;
-      --card-bg: #ffffff;
-      --border: #e0dcd5;
-      --text: #2d2a24;
-      --muted: #6b6560;
-      --green: #2e7d32;
-      --green-bg: #e8f5e9;
-      --red: #c62828;
-      --red-bg: #ffebee;
-      --blue: #1565c0;
-      --blue-bg: #e3f2fd;
-      --amber: #e65100;
-      --amber-bg: #fff3e0;
-      --radius: 8px;
+      --bg: #0f0f13;
+      --surface: #1a1a24;
+      --surface-2: #22222f;
+      --surface-3: #2a2a3a;
+      --border: #33334a;
+      --text: #e8e8f0;
+      --text-muted: #8888a0;
+      --text-dim: #5a5a70;
+      --accent: #6c5ce7;
+      --accent-glow: rgba(108, 92, 231, 0.25);
+      --green: #00d68f;
+      --green-bg: rgba(0, 214, 143, 0.12);
+      --red: #ff6b6b;
+      --red-bg: rgba(255, 107, 107, 0.12);
+      --amber: #ffa726;
+      --amber-bg: rgba(255, 167, 38, 0.12);
+      --blue: #45aaf2;
+      --blue-bg: rgba(69, 170, 242, 0.12);
+      --purple: #a55eea;
+      --radius: 12px;
+      --radius-sm: 8px;
       --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       --mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      --shadow: 0 4px 24px rgba(0,0,0,0.3);
     }
 
     body {
@@ -35,123 +43,375 @@
       min-height: 100vh;
     }
 
+    /* ── Scrollbar ──────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
     /* ── Header ─────────────────────────────────────────────────── */
     header {
-      background: var(--card-bg);
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
       border-bottom: 1px solid var(--border);
-      padding: 16px 24px;
+      padding: 18px 28px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
     }
-    header h1 { font-size: 1.35rem; display: flex; align-items: center; gap: 8px; }
-    header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    header .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header .brand-icon {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem;
+    }
+    header h1 {
+      font-size: 1.2rem; font-weight: 700;
+      background: linear-gradient(135deg, #fff 40%, var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    header h1 span { font-weight: 400; opacity: 0.6; }
+    .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-    /* ── Layout ─────────────────────────────────────────────────── */
-    main { max-width: 1200px; margin: 0 auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+    /* ── Main layout ────────────────────────────────────────────── */
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
 
+    /* ── Cards ──────────────────────────────────────────────────── */
     .card {
-      background: var(--card-bg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: var(--text-dim); }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .card-header h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-header .badge-count {
+      background: var(--surface-2);
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+    }
+
+    /* ── Stat cards row ─────────────────────────────────────────── */
+    .stat-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .stat-card {
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      transition: border-color 0.2s;
     }
-    .card h2 { font-size: 1.05rem; margin-bottom: 12px; color: var(--text); }
+    .stat-card:hover { border-color: var(--text-dim); }
+    .stat-icon {
+      width: 42px; height: 42px;
+      border-radius: var(--radius-sm);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+    .stat-icon.blue { background: var(--blue-bg); }
+    .stat-icon.green { background: var(--green-bg); }
+    .stat-icon.amber { background: var(--amber-bg); }
+    .stat-icon.purple { background: rgba(108, 92, 231, 0.12); }
+    .stat-icon.red { background: var(--red-bg); }
+    .stat-info { min-width: 0; }
+    .stat-label { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.3; }
+    .stat-value.green { color: var(--green); }
+    .stat-value.amber { color: var(--amber); }
+    .stat-value.blue { color: var(--blue); }
+    .stat-value.red { color: var(--red); }
+    .stat-sub { font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; }
 
-    /* ── Status bar ─────────────────────────────────────────────── */
-    .status-grid { display: flex; flex-wrap: wrap; gap: 16px; }
-    .status-item { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-    .status-dot.ok { background: var(--green); }
-    .status-dot.warn { background: var(--amber); }
-    .status-dot.bad { background: var(--red); }
-    .status-dot.idle { background: #999; }
-
+    /* ── Badges ─────────────────────────────────────────────────── */
     .badge {
-      display: inline-block; padding: 2px 10px; border-radius: 12px;
-      font-size: 0.78rem; font-weight: 600;
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 12px; border-radius: 20px;
+      font-size: 0.72rem; font-weight: 600;
+      white-space: nowrap;
     }
     .badge-ok { background: var(--green-bg); color: var(--green); }
     .badge-warn { background: var(--amber-bg); color: var(--amber); }
     .badge-bad { background: var(--red-bg); color: var(--red); }
     .badge-info { background: var(--blue-bg); color: var(--blue); }
+    .badge-purple { background: rgba(165, 94, 234, 0.12); color: var(--purple); }
+    .badge-outline { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+
+    /* ── Status dots ────────────────────────────────────────────── */
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+    .dot.red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+    .dot.blue { background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+    .dot.gray { background: var(--text-dim); }
 
     /* ── Buttons ────────────────────────────────────────────────── */
     button, .btn {
-      font-family: var(--font); font-size: 0.82rem; font-weight: 600;
-      padding: 6px 14px; border-radius: var(--radius); cursor: pointer;
+      font-family: var(--font); font-size: 0.8rem; font-weight: 600;
+      padding: 7px 16px; border-radius: var(--radius-sm); cursor: pointer;
       border: 1px solid transparent; transition: all 0.15s;
-      display: inline-flex; align-items: center; gap: 5px;
-      white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 6px;
+      white-space: nowrap; line-height: 1.4;
     }
-    button:disabled, .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    button:disabled, .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    .btn-primary { background: var(--blue); color: #fff; }
-    .btn-primary:hover:not(:disabled) { background: #0d47a1; }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--purple));
+      color: #fff; border: none;
+    }
+    .btn-primary:hover:not(:disabled) {
+      filter: brightness(1.15);
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
 
-    .btn-outline { background: transparent; border-color: var(--blue); color: var(--blue); }
-    .btn-outline:hover:not(:disabled) { background: var(--blue-bg); }
+    .btn-secondary {
+      background: var(--surface-2); color: var(--text);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover:not(:disabled) { background: var(--surface-3); }
 
-    .btn-danger { background: transparent; border-color: var(--red); color: var(--red); }
+    .btn-success {
+      background: var(--green); color: #000; border: none;
+    }
+    .btn-success:hover:not(:disabled) { filter: brightness(1.15); }
+
+    .btn-ghost {
+      background: transparent; color: var(--text-muted);
+      border-color: transparent;
+    }
+    .btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+
+    .btn-danger {
+      background: transparent; color: var(--red);
+      border-color: var(--red);
+    }
     .btn-danger:hover:not(:disabled) { background: var(--red-bg); }
 
-    .btn-sm { font-size: 0.75rem; padding: 3px 10px; }
+    .btn-sm { font-size: 0.72rem; padding: 4px 10px; }
+    .btn-xs { font-size: 0.65rem; padding: 2px 8px; border-radius: 6px; }
 
     /* ── Table ──────────────────────────────────────────────────── */
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-    th { font-weight: 700; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.4px; }
+    .table-wrap { overflow-x: auto; margin: 0 -4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+    th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    th {
+      font-weight: 600; color: var(--text-muted); font-size: 0.72rem;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      background: var(--surface-2);
+    }
+    th:first-child { border-radius: var(--radius-sm) 0 0 0; }
+    th:last-child { border-radius: 0 var(--radius-sm) 0 0; }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #fafaf7; }
-    .td-actions { display: flex; gap: 6px; align-items: center; }
+    tr:hover td { background: var(--surface-2); }
+    .td-actions { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
+    .movie-cell strong { font-weight: 600; }
+
+    /* ── Monitors list ──────────────────────────────────────────── */
+    .monitors-list { display: flex; flex-direction: column; gap: 8px; }
+    .monitor-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 14px;
+      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      transition: border-color 0.2s;
+    }
+    .monitor-item:hover { border-color: var(--text-dim); }
+    .monitor-item .mon-info { flex: 1; min-width: 0; }
+    .monitor-item .mon-name { font-weight: 600; font-size: 0.85rem; }
+    .monitor-item .mon-meta { font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; }
+    .monitor-item .mon-status { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; }
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding: 32px; color: var(--text-dim); text-align: center;
+    }
+    .empty-state .icon { font-size: 2rem; opacity: 0.5; }
 
     /* ── Log viewer ─────────────────────────────────────────────── */
     .log-viewer {
-      background: #1e1e1e; color: #d4d4d4; border-radius: var(--radius);
-      padding: 12px 16px; font-family: var(--mono); font-size: 0.78rem;
-      max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
-      line-height: 1.6;
+      background: #0a0a0f;
+      color: #a0a0c0;
+      border-radius: var(--radius-sm);
+      padding: 14px 18px;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.7;
+      border: 1px solid var(--border);
     }
 
-    /* ── Modal overlay (for booking spinner) ────────────────────── */
+    /* ── Side panel (Add Request) ───────────────────────────────── */
+    .side-panel-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 500; backdrop-filter: blur(4px);
+    }
+    .side-panel-overlay.active { display: block; }
+
+    .side-panel {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: 460px; max-width: 100vw;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      z-index: 600;
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex; flex-direction: column;
+      box-shadow: -8px 0 40px rgba(0,0,0,0.4);
+    }
+    .side-panel.open { transform: translateX(0); }
+
+    .side-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .side-panel-header h2 { font-size: 1rem; font-weight: 600; }
+
+    .side-panel-body {
+      flex: 1; overflow-y: auto; padding: 20px 24px;
+    }
+
+    .side-panel-footer {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 8px; justify-content: flex-end;
+    }
+
+    /* ── Form elements ──────────────────────────────────────────── */
+    .form-group { margin-bottom: 16px; }
+    .form-group label {
+      display: block;
+      font-size: 0.75rem; font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-family: var(--font);
+      font-size: 0.85rem;
+      color: var(--text);
+      transition: all 0.2s;
+    }
+    .form-group input:focus, .form-group select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .form-group input::placeholder { color: var(--text-dim); }
+    .form-hint { font-size: 0.7rem; color: var(--text-dim); margin-top: 4px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 500px) { .form-row { grid-template-columns: 1fr; } }
+
+    /* ── Loading overlay ────────────────────────────────────────── */
     .overlay {
-      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35);
-      z-index: 1000; align-items: center; justify-content: center;
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 900; align-items: center; justify-content: center;
+      backdrop-filter: blur(6px);
     }
     .overlay.active { display: flex; }
     .overlay-box {
-      background: var(--card-bg); border-radius: var(--radius); padding: 32px 40px;
-      text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 48px;
+      text-align: center;
+      box-shadow: var(--shadow);
     }
     .spinner {
-      width: 40px; height: 40px; margin: 0 auto 16px;
-      border: 3px solid var(--border); border-top-color: var(--blue);
-      border-radius: 50%; animation: spin 0.7s linear infinite;
+      width: 44px; height: 44px; margin: 0 auto 18px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Add-request form ───────────────────────────────────────── */
-    .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
-    .form-group { display: flex; flex-direction: column; gap: 4px; }
-    .form-group label { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
-    .form-group input, .form-group select {
-      padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius);
-      font-family: var(--font); font-size: 0.85rem;
-    }
-    .form-group input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-bg); }
-
     /* ── Toast ──────────────────────────────────────────────────── */
-    .toast-container { position: fixed; top: 16px; right: 16px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
-    .toast { padding: 10px 18px; border-radius: var(--radius); font-size: 0.85rem; animation: slideIn 0.25s ease; }
-    .toast.success { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
-    .toast.error { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
-    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    .toast-container {
+      position: fixed; top: 72px; right: 20px;
+      z-index: 999; display: flex; flex-direction: column; gap: 8px;
+    }
+    .toast {
+      padding: 12px 20px; border-radius: var(--radius-sm);
+      font-size: 0.84rem; font-weight: 500;
+      animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      border: 1px solid;
+      box-shadow: var(--shadow);
+    }
+    .toast.success { background: rgba(0, 214, 143, 0.15); color: var(--green); border-color: var(--green); }
+    .toast.error { background: rgba(255, 107, 107, 0.15); color: var(--red); border-color: var(--red); }
+    .toast.info { background: rgba(69, 170, 242, 0.15); color: var(--blue); border-color: var(--blue); }
+    .toast.warn { background: rgba(255, 167, 38, 0.15); color: var(--amber); border-color: var(--amber); }
+    @keyframes toastIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    /* ── Animations ─────────────────────────────────────────────── */
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .pulse { animation: pulse 1.5s ease-in-out infinite; }
 
     /* ── Responsive ─────────────────────────────────────────────── */
     @media (max-width: 768px) {
-      .form-row { flex-direction: column; }
-      header { flex-direction: column; align-items: flex-start; }
+      main { padding: 16px; }
+      header { padding: 14px 16px; flex-direction: column; align-items: flex-start; }
+      .stat-row { grid-template-columns: repeat(2, 1fr); }
+      .side-panel { width: 100%; }
+    }
+    @media (max-width: 480px) {
+      .stat-row { grid-template-columns: 1fr; }
+      .td-actions { flex-wrap: wrap; }
+      .card { padding: 14px 16px; }
     }
   </style>
 </head>
@@ -161,10 +421,13 @@
   <!-- Header                                                         -->
   <!-- ══════════════════════════════════════════════════════════════ -->
   <header>
-    <h1>🎬 BMS Auto‑Booking</h1>
-    <div class="actions">
-      <button class="btn-outline btn-sm" onclick="toggleAddForm()" id="btn-add-toggle">
-        ＋ Add Request
+    <div class="brand">
+      <div class="brand-icon">🎬</div>
+      <h1>BMS <span>Auto-Booking</span></h1>
+    </div>
+    <div class="header-actions">
+      <button class="btn-secondary btn-sm" onclick="openAddPanel()">
+        ＋ Add Movie
       </button>
     </div>
   </header>
@@ -175,106 +438,278 @@
   <div class="toast-container" id="toasts"></div>
 
   <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Loading overlay                                                -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="overlay" id="booking-overlay">
+    <div class="overlay-box">
+      <div class="spinner"></div>
+      <p><strong id="overlay-text">Processing…</strong></p>
+      <p style="color:var(--text-dim);font-size:0.82rem;margin-top:6px;" id="overlay-sub">This may take a moment</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!-- Side panel — Add Request                                       -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <div class="side-panel-overlay" id="side-overlay" onclick="closeAddPanel()"></div>
+  <div class="side-panel" id="side-panel">
+    <div class="side-panel-header">
+      <h2>➕ New Booking Request</h2>
+      <button class="btn-ghost btn-sm" onclick="closeAddPanel()">✕</button>
+    </div>
+    <div class="side-panel-body">
+      <div class="form-group">
+        <label>Movie Name *</label>
+        <input type="text" id="add-movie" placeholder="e.g. Coolie (2026)" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Date *</label>
+          <input type="date" id="add-date">
+        </div>
+        <div class="form-group">
+          <label>Time Range</label>
+          <select id="add-time">
+            <option value="morning">🌅 Morning</option>
+            <option value="afternoon">☀️ Afternoon</option>
+            <option value="evening" selected>🌆 Evening</option>
+            <option value="night">🌙 Night</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>City</label>
+          <input type="text" id="add-city" placeholder="Coimbatore" value="Coimbatore">
+        </div>
+        <div class="form-group">
+          <label>Payment</label>
+          <select id="add-payment">
+            <option value="upi" selected>UPI (Phone)</option>
+            <option value="gift_card">Gift Card</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Cinemas (comma separated)</label>
+        <input type="text" id="add-cinemas" placeholder="PVR Brookfields, INOX Prozone">
+        <div class="form-hint">Leave empty to watch all cinemas</div>
+      </div>
+      <div class="form-group">
+        <label>Movie URL (from BMS movie page)</label>
+        <input type="text" id="add-url" placeholder="https://in.bookmyshow.com/movies/coimbatore/.../ET...">
+        <div class="form-hint">Required for auto‑monitoring. Paste the full movie page URL.</div>
+      </div>
+    </div>
+    <div class="side-panel-footer">
+      <button class="btn-secondary" onclick="closeAddPanel()">Cancel</button>
+      <button class="btn-primary" onclick="addRequest()">➕ Add Request</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════ -->
   <!-- Main content                                                   -->
   <!-- ══════════════════════════════════════════════════════════════ -->
   <main>
 
-    <!-- ── System Status ─────────────────────────────────────────── -->
-    <div class="card">
-      <h2>📊 System Status</h2>
-      <div class="status-grid" id="status-bar">
-        <div class="status-item">
-          <span class="status-dot idle" id="status-booking-dot"></span>
-          <span>Booking: <strong id="status-booking-text">
-            {% if is_booking %}🔄 Processing {{ current_booking_id }}…
-            {% else %}idle{% endif %}
-          </strong></span>
+    <!-- ── Status Stat Cards ─────────────────────────────────────── -->
+    <div class="stat-row" id="stat-row">
+      <div class="stat-card">
+        <div class="stat-icon purple">📋</div>
+        <div class="stat-info">
+          <div class="stat-label">Requests</div>
+          <div class="stat-value">{{ booking_requests | length }}</div>
+          <div class="stat-sub">{{ watcher_count }} active monitors</div>
         </div>
-        <div class="status-item">
-          <span>Last result:</span>
-          <span id="status-last-result">
-            {% if last_result %}
-              {% if last_result.success %}
-                <span class="badge badge-ok">✅ {{ last_result.movie_name }} — Booked!</span>
-              {% elif last_result.dry_run %}
-                <span class="badge badge-info">🔍 {{ last_result.movie_name }} — Dry‑run OK</span>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green">👀</div>
+        <div class="stat-info">
+          <div class="stat-label">Monitors</div>
+          <div class="stat-value green" id="stat-monitors">{{ watcher_count }}</div>
+          <div class="stat-sub" id="stat-monitors-sub">watching for openings</div>
+        </div>
+      </div>
+      <div class="stat-card" id="stat-last-card">
+        {% if last_result %}
+          {% if last_result.success %}
+            <div class="stat-icon green">✅</div>
+            <div class="stat-info">
+              <div class="stat-label">Last Booking</div>
+              <div class="stat-value green" style="font-size:1rem;">{{ last_result.movie_name }}</div>
+              <div class="stat-sub">Booked! {{ last_result.booking_id }}</div>
+            </div>
+          {% elif last_result.dry_run %}
+            <div class="stat-icon amber">🔍</div>
+            <div class="stat-info">
+              <div class="stat-label">Last Dry‑Run</div>
+              <div class="stat-value amber" style="font-size:1rem;">{{ last_result.movie_name }}</div>
+              <div class="stat-sub">Completed — no payment made</div>
+            </div>
+          {% else %}
+            <div class="stat-icon red">❌</div>
+            <div class="stat-info">
+              <div class="stat-label">Last Result</div>
+              <div class="stat-value red" style="font-size:1rem;">{{ last_result.movie_name }}</div>
+              <div class="stat-sub">{{ last_result.error[:50] }}</div>
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="stat-icon blue">ℹ️</div>
+          <div class="stat-info">
+            <div class="stat-label">Status</div>
+            <div class="stat-value blue" style="font-size:1rem;">Ready</div>
+            <div class="stat-sub">No bookings yet</div>
+          </div>
+        {% endif %}
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon amber">⚙️</div>
+        <div class="stat-info">
+          <div class="stat-label">System</div>
+          <div class="stat-value amber" style="font-size:1rem;" id="status-booking-text">
+            {% if is_booking %}🔄 Processing{% else %}Idle{% endif %}
+          </div>
+          <div class="stat-sub" id="status-booking-sub">
+            {% if is_booking %}{{ current_booking_id }}{% else %}Ready for requests{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Active Monitors Panel ─────────────────────────────────── -->
+    <div class="card" id="monitors-card">
+      <div class="card-header">
+        <h2>👀 Active Monitors <span class="badge-count" id="monitors-badge">{{ watcher_count }} running</span></h2>
+        <button class="btn-ghost btn-sm" onclick="refreshMonitors()" title="Refresh">🔄</button>
+      </div>
+      <div id="monitors-list">
+        {% if watchers %}
+        <div class="monitors-list">
+          {% for w in watchers %}
+          <div class="monitor-item" id="mon-{{ w.request_id }}">
+            <span class="dot {{ 'green' if w.last_result == 'waiting' else 'amber' if w.last_result == 'open' else 'red' if w.last_result == 'error' else 'gray' }}"
+                  id="mon-dot-{{ w.request_id }}"></span>
+            <div class="mon-info">
+              <div class="mon-name">{{ w.movie_name }}</div>
+              <div class="mon-meta" id="mon-meta-{{ w.request_id }}">
+                Last check: {{ w.last_check or '—' }}
+                {% if w.last_result == 'waiting' %} · bookings not open yet
+                {% elif w.last_result == 'open' %} · 🎯 BOOKING OPEN!
+                {% elif w.last_result == 'error' %} · ⚠️ error
+                {% endif %}
+              </div>
+            </div>
+            <div class="mon-status">
+              {% if w.last_result == 'open' %}
+                <span class="badge badge-ok">Opened</span>
+              {% elif w.last_result == 'error' %}
+                <span class="badge badge-bad">Error</span>
+              {% elif w.notified %}
+                <span class="badge badge-purple">Notified</span>
+              {% elif w.is_running %}
+                <span class="badge badge-info"><span class="pulse">●</span> Polling</span>
               {% else %}
-                <span class="badge badge-bad">❌ {{ last_result.movie_name }} — {{ last_result.error[:60] }}</span>
+                <span class="badge badge-outline">Stopped</span>
               {% endif %}
-            {% else %}
-              <span class="badge badge-info">No bookings yet</span>
-            {% endif %}
-          </span>
+            </div>
+          </div>
+          {% endfor %}
         </div>
+        {% else %}
+        <div class="empty-state">
+          <div class="icon">🕵️</div>
+          <p>No active monitors</p>
+          <p style="font-size:0.78rem;">Add a movie with a URL to start monitoring automatically.</p>
+        </div>
+        {% endif %}
       </div>
-      {% if errors %}
-      <div style="margin-top: 12px; font-size: 0.8rem; color: var(--red);" id="error-list">
-        {% for e in errors %}
-        <div>⚠️ [{{ e.timestamp }}] {{ e.message }}</div>
-        {% endfor %}
-      </div>
-      {% endif %}
     </div>
 
     <!-- ── Booking Requests Table ─────────────────────────────────── -->
     <div class="card">
-      <h2>📋 Booking Requests</h2>
+      <div class="card-header">
+        <h2>📋 Booking Requests <span class="badge-count">{{ booking_requests | length }} total</span></h2>
+        <button class="btn-secondary btn-sm" onclick="openAddPanel()">＋ Add</button>
+      </div>
       {% if booking_requests %}
-      <div style="overflow-x: auto;">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Movie</th>
               <th>Date</th>
-              <th>Time</th>
-              <th>Cinemas</th>
-              <th>Auto</th>
-              <th>Payment</th>
+              <th>Cinema</th>
+              <th>Monitor</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody id="requests-table-body">
             {% for req in booking_requests %}
+            {% set status = req.get('status', 'monitoring') %}
             <tr id="row-{{ req.id }}">
-              <td><strong>{{ req.movie_name }}</strong></td>
+              <td class="movie-cell"><strong>{{ req.movie_name }}</strong></td>
               <td>{{ req.date }}</td>
-              <td>{{ ', '.join(req.preferred_time_range) if req.preferred_time_range else '—' }}</td>
-              <td>{{ ', '.join(req.cinemas) if req.cinemas else 'any' }}</td>
-              <td>{% if req.auto_book %}✅{% else %}—{% endif %}</td>
-              <td><span class="badge badge-info">{{ req.get('payment_method', 'upi') | upper }}</span></td>
               <td>
-                {% set status = req.get('status', 'monitoring') %}
-                {% if status == 'booked' %}
-                  <span class="badge badge-ok">booked</span>
-                {% elif status == 'monitoring' %}
-                  <span class="badge badge-info">monitoring</span>
-                {% elif status == 'active' %}
-                  <span class="badge badge-warn">active</span>
+                {% if req.cinemas %}
+                  <span style="font-size:0.78rem;">{{ ', '.join(req.cinemas[:2]) }}{% if req.cinemas | length > 2 %}+{{ req.cinemas | length - 2 }}{% endif %}</span>
                 {% else %}
-                  <span class="badge">{{ status }}</span>
+                  <span style="color:var(--text-dim)">any</span>
+                {% endif %}
+              </td>
+              <td>
+                <span id="mon-indicator-{{ req.id }}">
+                  {% if req.get('auto_book') and req.get('movie_url') %}
+                    {% if status == 'booked' %}
+                      <span class="badge badge-outline">—</span>
+                    {% else %}
+                      <span class="dot green pulse" id="mon-dot-table-{{ req.id }}" title="Monitoring active"></span>
+                    {% endif %}
+                  {% else %}
+                    <span style="color:var(--text-dim);font-size:0.72rem;">—</span>
+                  {% endif %}
+                </span>
+              </td>
+              <td>
+                {% if status == 'booked' %}
+                  <span class="badge badge-ok">✅ Booked</span>
+                {% elif status == 'monitoring' %}
+                  <span class="badge badge-info">Monitoring</span>
+                {% elif status == 'active' %}
+                  <span class="badge badge-warn">Active</span>
+                {% elif status == 'booking_failed' %}
+                  <span class="badge badge-bad">Failed</span>
+                {% elif status == 'expired' %}
+                  <span class="badge badge-outline">Expired</span>
+                {% else %}
+                  <span class="badge badge-outline">{{ status }}</span>
                 {% endif %}
               </td>
               <td>
                 <div class="td-actions">
-                  <button class="btn-primary btn-sm"
+                  <button class="btn-primary btn-xs"
                           onclick="bookRequest('{{ req.id }}', false)"
-                          id="btn-book-{{ req.id }}">
-                    🎟️ Book Now
+                          id="btn-book-{{ req.id }}"
+                          title="Book Now (Playwright)">
+                    🎟️ Book
                   </button>
-                  <button class="btn-primary btn-sm"
+                  <button class="btn-success btn-xs"
                           onclick="bookAI('{{ req.id }}', false)"
                           id="btn-ai-{{ req.id }}"
-                          style="background: var(--green);">
-                    🤖 AI Book
+                          title="AI-Powered Booking">
+                    🤖 AI
                   </button>
-                  <button class="btn-outline btn-sm"
+                  <button class="btn-secondary btn-xs"
                           onclick="bookRequest('{{ req.id }}', true)"
-                          id="btn-dry-{{ req.id }}">
-                    🔍 Dry‑Run
+                          id="btn-dry-{{ req.id }}"
+                          title="Dry Run (test without payment)">
+                    🔍
                   </button>
-                  <button class="btn-danger btn-sm"
-                          onclick="deleteRequest('{{ req.id }}')">
+                  <button class="btn-ghost btn-xs"
+                          onclick="deleteRequest('{{ req.id }}')"
+                          title="Delete request"
+                          style="color:var(--red);">
                     🗑️
                   </button>
                 </div>
@@ -285,62 +720,36 @@
         </table>
       </div>
       {% else %}
-      <p style="color: var(--muted);">No booking requests configured. Click "＋ Add Request" to add one.</p>
+      <div class="empty-state">
+        <div class="icon">🎬</div>
+        <p>No booking requests yet</p>
+        <p style="font-size:0.78rem;">Click "＋ Add Movie" to start tracking a movie.</p>
+        <button class="btn-primary btn-sm" style="margin-top:8px;" onclick="openAddPanel()">＋ Add Your First Movie</button>
+      </div>
       {% endif %}
+    </div>
 
-      <!-- ── Add Request Form (hidden by default) ──────────────── -->
-      <div id="add-request-form" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
-        <h3 style="font-size: 0.95rem; margin-bottom: 12px;">New Booking Request</h3>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Movie Name *</label>
-            <input type="text" id="add-movie" placeholder="e.g. Coolie" style="min-width: 180px;">
-          </div>
-          <div class="form-group">
-            <label>Date *</label>
-            <input type="date" id="add-date">
-          </div>
-          <div class="form-group">
-            <label>City</label>
-            <input type="text" id="add-city" placeholder="Coimbatore" style="min-width: 140px;">
-          </div>
-          <div class="form-group">
-            <label>Time Range</label>
-            <select id="add-time">
-              <option value="morning">Morning</option>
-              <option value="afternoon">Afternoon</option>
-              <option value="evening" selected>Evening</option>
-              <option value="night">Night</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Cinemas (comma-separated)</label>
-            <input type="text" id="add-cinemas" placeholder="PVR Brookfields, INOX" style="min-width: 200px;">
-          </div>
-          <div class="form-group">
-            <label>Payment Method</label>
-            <select id="add-payment">
-              <option value="upi" selected>UPI (Phone Approval)</option>
-              <option value="gift_card">Gift Card</option>
-            </select>
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Movie URL (paste from BMS movie page)</label>
-            <input type="text" id="add-url" placeholder="https://in.bookmyshow.com/movies/coimbatore/movie-name/ET..." style="min-width: 350px;">
-          </div>
-          <div class="form-group" style="align-self: flex-end;">
-            <button class="btn-primary" onclick="addRequest()">➕ Add</button>
-            <button class="btn-outline" onclick="toggleAddForm()">Cancel</button>
-          </div>
-        </div>
+    <!-- ── Errors ────────────────────────────────────────────────── -->
+    {% if errors %}
+    <div class="card" style="border-color: var(--red);">
+      <div class="card-header">
+        <h2>⚠️ Recent Errors</h2>
+      </div>
+      <div style="font-size:0.8rem; color: var(--red);" id="error-list">
+        {% for e in errors %}
+        <div style="padding:4px 0;">⚠️ [{{ e.timestamp }}] {{ e.message }}</div>
+        {% endfor %}
       </div>
     </div>
+    {% endif %}
 
     <!-- ── Log Viewer ───────────────────────────────────────────── -->
     <div class="card">
-      <h2>📜 Logs <span style="font-weight:400;font-size:0.78rem;color:var(--muted);">(auto‑refresh 5s)</span></h2>
+      <div class="card-header">
+        <h2>📜 Logs <span style="font-weight:400;font-size:0.72rem;color:var(--text-dim);">(auto‑refresh 5s)</span></h2>
+        <button class="btn-ghost btn-sm" onclick="document.getElementById('log-viewer').classList.toggle('collapsed')"
+                title="Toggle log viewer">⊟</button>
+      </div>
       <div class="log-viewer" id="log-viewer">
         {% for line in log_lines %}{{ line }}
         {% endfor %}
@@ -350,18 +759,7 @@
   </main>
 
   <!-- ══════════════════════════════════════════════════════════════ -->
-  <!-- Booking overlay (spinner)                                      -->
-  <!-- ══════════════════════════════════════════════════════════════ -->
-  <div class="overlay" id="booking-overlay">
-    <div class="overlay-box">
-      <div class="spinner"></div>
-      <p><strong id="overlay-text">Booking in progress…</strong></p>
-      <p style="color:var(--muted);font-size:0.82rem;margin-top:4px;">This may take 20–30 seconds</p>
-    </div>
-  </div>
-
-  <!-- ══════════════════════════════════════════════════════════════ -->
-  <!-- Scripts                                                        -->
+  <!-- JavaScript                                                      -->
   <!-- ══════════════════════════════════════════════════════════════ -->
   <script>
     // ── Toast ──────────────────────────────────────────────────────
@@ -371,19 +769,33 @@
       el.className = `toast ${type}`;
       el.textContent = msg;
       container.appendChild(el);
-      setTimeout(() => el.remove(), 4000);
+      setTimeout(() => el.remove(), 4500);
     }
+
+    // ── Side panel ─────────────────────────────────────────────────
+    function openAddPanel() {
+      document.getElementById('side-panel').classList.add('open');
+      document.getElementById('side-overlay').classList.add('active');
+    }
+    function closeAddPanel() {
+      document.getElementById('side-panel').classList.remove('open');
+      document.getElementById('side-overlay').classList.remove('active');
+    }
+
+    // ── Set default date ───────────────────────────────────────────
+    document.getElementById('add-date').value = new Date().toISOString().split('T')[0];
 
     // ── Book request ───────────────────────────────────────────────
     async function bookRequest(requestId, dryRun) {
       const overlay = document.getElementById('booking-overlay');
       const overlayText = document.getElementById('overlay-text');
+      const overlaySub = document.getElementById('overlay-sub');
       overlayText.textContent = dryRun
-        ? `Dry‑run: ${requestId}…`
-        : `Booking: ${requestId}…`;
+        ? `🔍 Dry-run: ${requestId}`
+        : `🎟️ Booking: ${requestId}`;
+      overlaySub.textContent = 'This may take 20–30 seconds…';
       overlay.classList.add('active');
 
-      // Disable all booking buttons
       document.querySelectorAll('button[id^="btn-book-"], button[id^="btn-dry-"]')
         .forEach(b => b.disabled = true);
 
@@ -393,11 +805,11 @@
         const data = await resp.json();
 
         if (resp.status === 409) {
-          toast(`⚠️ ${data.error} (${data.current_booking_id})`, 'error');
+          toast(`⚠️ ${data.error} (${data.current_booking_id})`, 'warn');
         } else if (data.success) {
           toast(`🎉 Booking confirmed for ${data.movie_name}!`, 'success');
         } else if (data.dry_run) {
-          toast(`🔍 Dry‑run complete for ${data.movie_name}`, 'success');
+          toast(`🔍 Dry-run complete for ${data.movie_name}`, 'success');
         } else {
           toast(`❌ Booking failed: ${data.error ? data.error.slice(0,80) : 'Unknown'}`, 'error');
         }
@@ -412,13 +824,15 @@
       }
     }
 
-    // ── Delete request ─────────────────────────────────────────────
+    // ── AI Book request ────────────────────────────────────────────
     async function bookAI(requestId, dryRun) {
       const overlay = document.getElementById('booking-overlay');
       const overlayText = document.getElementById('overlay-text');
+      const overlaySub = document.getElementById('overlay-sub');
       overlayText.textContent = dryRun
-        ? `🤖 AI Dry‑run: ${requestId}…`
-        : `🤖 AI Booking: ${requestId}…`;
+        ? `🤖 AI Dry-run: ${requestId}`
+        : `🤖 AI Booking: ${requestId}`;
+      overlaySub.textContent = 'AI agent is working — this may take a minute…';
       overlay.classList.add('active');
 
       try {
@@ -439,7 +853,7 @@
         if (data.success) {
           toast(`🤖 ✅ AI Booking: ${data.movie_name} — Success!`, 'success');
         } else if (data.dry_run) {
-          toast(`🤖 🔍 AI Dry‑run: ${data.movie_name} — OK`, 'success');
+          toast(`🤖 🔍 AI Dry-run: ${data.movie_name} — OK`, 'success');
         } else {
           toast(`🤖 ❌ ${data.movie_name} — ${(data.error||'').slice(0,80)}`, 'error');
         }
@@ -451,17 +865,21 @@
       }
     }
 
+    // ── Delete request ─────────────────────────────────────────────
     async function deleteRequest(requestId) {
-      if (!confirm(`Delete booking request '${requestId}'?`)) return;
+      if (!confirm(`Delete request '${requestId}'? The background monitor will stop.`)) return;
 
       try {
         const resp = await fetch(`/api/delete-request/${encodeURIComponent(requestId)}`, { method: 'DELETE' });
         const data = await resp.json();
         if (resp.ok) {
           toast(`🗑️ Deleted ${requestId}`, 'success');
-          // Remove row from table
           const row = document.getElementById(`row-${requestId}`);
           if (row) row.remove();
+          // Also remove from monitors panel if present
+          const mon = document.getElementById(`mon-${requestId}`);
+          if (mon) mon.remove();
+          refreshMonitors();
         } else {
           toast(`❌ ${data.detail || 'Delete failed'}`, 'error');
         }
@@ -471,15 +889,6 @@
     }
 
     // ── Add request ────────────────────────────────────────────────
-    document.getElementById('add-date').value = new Date().toISOString().split('T')[0];
-
-    function toggleAddForm() {
-      const form = document.getElementById('add-request-form');
-      const btn = document.getElementById('btn-add-toggle');
-      form.style.display = form.style.display === 'none' ? 'block' : 'none';
-      btn.textContent = form.style.display === 'none' ? '＋ Add Request' : '－ Cancel';
-    }
-
     async function addRequest() {
       const movie = document.getElementById('add-movie').value.trim();
       const date = document.getElementById('add-date').value;
@@ -503,7 +912,7 @@
           body: JSON.stringify({
             movie_name: movie,
             date: date,
-            city: city,
+            city: city || 'Coimbatore',
             preferred_time_range: [time],
             cinemas: cinemas,
             movie_url: url || null,
@@ -514,14 +923,68 @@
         const data = await resp.json();
         if (resp.ok) {
           toast(`✅ Added ${data.request.movie_name} (${data.request.id})`, 'success');
-          // Reload to show new row
-          setTimeout(() => location.reload(), 800);
+          closeAddPanel();
+          // Reload to show new state with watcher
+          setTimeout(() => location.reload(), 600);
         } else {
-          toast(`❌ ${data.detail || 'Failed'}`, 'error');
+          toast(`❌ ${data.detail || 'Failed to add request'}`, 'error');
         }
       } catch (err) {
         toast(`⚠️ ${err.message}`, 'error');
       }
+    }
+
+    // ── Monitor polling ────────────────────────────────────────────
+    async function refreshMonitors() {
+      try {
+        const resp = await fetch('/api/monitors');
+        const data = await resp.json();
+        const container = document.getElementById('monitors-list');
+        const badge = document.getElementById('monitors-badge');
+        const statMon = document.getElementById('stat-monitors');
+        const statMonSub = document.getElementById('stat-monitors-sub');
+
+        if (badge) badge.textContent = `${data.active_count} running`;
+        if (statMon) statMon.textContent = data.active_count;
+        if (statMonSub) statMonSub.textContent = data.active_count === 1 ? '1 watcher active' : `${data.active_count} watchers active`;
+
+        // Update each monitor item in-place instead of full re-render
+        if (data.monitors && data.monitors.length > 0) {
+          for (const m of data.monitors) {
+            // Update dot
+            const dot = document.getElementById(`mon-dot-${m.request_id}`);
+            if (dot) {
+              let cls = 'gray';
+              if (m.last_result === 'waiting') cls = 'green';
+              else if (m.last_result === 'open') cls = 'amber';
+              else if (m.last_result === 'error') cls = 'red';
+              dot.className = `dot ${cls}`;
+            }
+            // Update meta
+            const meta = document.getElementById(`mon-meta-${m.request_id}`);
+            if (meta) {
+              let txt = `Last check: ${m.last_check || '—'}`;
+              if (m.last_result === 'waiting') txt += ' · bookings not open yet';
+              else if (m.last_result === 'open') txt += ' · 🎯 BOOKING OPEN!';
+              else if (m.last_result === 'error') txt += ' · ⚠️ error';
+              meta.textContent = txt;
+            }
+            // Update table indicator
+            const tableDot = document.getElementById(`mon-dot-table-${m.request_id}`);
+            if (tableDot) {
+              if (m.last_result === 'open') {
+                tableDot.className = 'dot amber';
+              } else if (m.last_result === 'error') {
+                tableDot.className = 'dot red';
+              } else if (m.is_running && m.last_result === 'waiting') {
+                tableDot.className = 'dot green pulse';
+              } else {
+                tableDot.className = 'dot gray';
+              }
+            }
+          }
+        }
+      } catch (err) { /* silent */ }
     }
 
     // ── Status polling ─────────────────────────────────────────────
@@ -530,27 +993,26 @@
         const resp = await fetch('/api/status');
         const data = await resp.json();
 
-        // Booking dot
-        const bookingDot = document.getElementById('status-booking-dot');
         const bookingText = document.getElementById('status-booking-text');
+        const bookingSub = document.getElementById('status-booking-sub');
         if (data.is_booking) {
-          bookingDot.className = 'status-dot ok';
-          bookingText.textContent = `🔄 Processing ${data.current_booking_id}…`;
+          bookingText.textContent = '🔄 Processing';
+          bookingSub.textContent = data.current_booking_id || '';
         } else {
-          bookingDot.className = 'status-dot idle';
-          bookingText.textContent = 'idle';
+          bookingText.textContent = 'Idle';
+          bookingSub.textContent = 'Ready for requests';
         }
 
-        // Last result
+        // Update last result stat card
         if (data.last_result) {
           const r = data.last_result;
-          const el = document.getElementById('status-last-result');
+          const card = document.getElementById('stat-last-card');
           if (r.success) {
-            el.innerHTML = `<span class="badge badge-ok">✅ ${r.movie_name} — Booked!</span>`;
+            card.innerHTML = `<div class="stat-icon green">✅</div><div class="stat-info"><div class="stat-label">Last Booking</div><div class="stat-value green" style="font-size:1rem;">${r.movie_name}</div><div class="stat-sub">Booked! ${r.booking_id || ''}</div></div>`;
           } else if (r.dry_run) {
-            el.innerHTML = `<span class="badge badge-info">🔍 ${r.movie_name} — Dry‑run OK</span>`;
+            card.innerHTML = `<div class="stat-icon amber">🔍</div><div class="stat-info"><div class="stat-label">Last Dry‑Run</div><div class="stat-value amber" style="font-size:1rem;">${r.movie_name}</div><div class="stat-sub">Completed — no payment made</div></div>`;
           } else {
-            el.innerHTML = `<span class="badge badge-bad">❌ ${r.movie_name} — ${(r.error||'').slice(0,60)}</span>`;
+            card.innerHTML = `<div class="stat-icon red">❌</div><div class="stat-info"><div class="stat-label">Last Result</div><div class="stat-value red" style="font-size:1rem;">${r.movie_name}</div><div class="stat-sub">${(r.error||'').slice(0,50)}</div></div>`;
           }
         }
       } catch (err) { /* silent */ }
@@ -570,6 +1032,7 @@
     // ── Start polling ──────────────────────────────────────────────
     setInterval(refreshStatus, 3000);
     setInterval(refreshLogs, 5000);
+    setInterval(refreshMonitors, 4000);
   </script>
 </body>
 </html>

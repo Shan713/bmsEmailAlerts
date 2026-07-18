@@ -4,12 +4,23 @@ FastAPI web dashboard for the BMS autonomous booking agent.
 
 Run with::
 
-    uvicorn web_server:app --reload --host 0.0.0.0 --port 8000
+    python run_web.py
 
-Then open http://localhost:8000 in your browser.
+Or directly with uvicorn (no --reload on Windows)::
+
+    uvicorn web_server:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
+
+# Windows asyncio fix: ProactorEventLoop supports subprocess (needed by Playwright)
+import sys
+if sys.platform == "win32":
+    try:
+        import asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        pass
 
 import asyncio
 import json
@@ -29,6 +40,11 @@ from booking_engine import (
     save_config,
 )
 from credential_manager import SecureCredentialManager
+from monitor_manager import WatcherManager
+
+# Load environment variables from .env (API keys, etc.)
+from dotenv import load_dotenv
+load_dotenv()
 
 # Optional: import AI agent for direct booking
 try:
@@ -43,12 +59,21 @@ except ImportError:
 
 LOG_FILE = "booking_agent.log"
 
+# Ensure console can handle UTF-8 (emojis in log messages)
+import sys
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )
@@ -86,6 +111,13 @@ current_booking_id: Optional[str] = None
 system_errors: List[Dict[str, Any]] = []  # [{timestamp, message}]
 
 
+# ---------------------------------------------------------------------------
+# Watcher manager for per-request background monitoring
+# ---------------------------------------------------------------------------
+
+watcher_manager = WatcherManager(default_interval=60)
+
+
 def _add_error(message: str) -> None:
     """Record a system error with a timestamp (keep last 50)."""
     system_errors.append({
@@ -95,6 +127,37 @@ def _add_error(message: str) -> None:
     if len(system_errors) > 50:
         system_errors.pop(0)
     logger.error("System error: %s", message)
+
+
+# ---------------------------------------------------------------------------
+# Startup — restore watchers from config
+# ---------------------------------------------------------------------------
+
+
+@app.on_event("startup")
+async def startup_restore_watchers():
+    """On server start, re-create watchers for any monitoring requests."""
+    try:
+        config = load_config()
+        requests = config.get("booking_requests", [])
+        monitoring = [
+            r for r in requests
+            if r.get("status") in ("monitoring", "active")
+            and r.get("auto_book")
+            and r.get("movie_url")
+        ]
+        if monitoring:
+            logger.info(
+                "🚀 Restoring %d watcher(s) from config…", len(monitoring)
+            )
+            for req in monitoring:
+                watcher_manager.add_watcher(req)
+        logger.info(
+            "✅ Watchers restored: %d active",
+            watcher_manager.watcher_count(),
+        )
+    except Exception as exc:
+        logger.warning("Could not restore watchers on startup: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +189,8 @@ async def dashboard(request: Request):
             "last_result": last_booking_result,
             "log_lines": log_lines,
             "errors": system_errors[-10:],
+            "watchers": watcher_manager.get_all_status(),
+            "watcher_count": watcher_manager.watcher_count(),
         },
     )
 
@@ -153,6 +218,10 @@ async def api_status():
         "current_booking_id": current_booking_id,
         "last_result": last_booking_result,
         "errors": system_errors[-10:],
+        "watchers": {
+            "active_count": watcher_manager.watcher_count(),
+            "monitors": watcher_manager.get_all_status(),
+        },
     }
 
     # Try to get gift card balance if credentials exist
@@ -277,6 +346,20 @@ async def add_request(data: Dict[str, Any]):
     try:
         save_config(config)
         logger.info("[web] Added booking request: %s (%s)", new_id, data["movie_name"])
+
+        # Start a background watcher for this request
+        if new_request.get("auto_book") and new_request.get("movie_url"):
+            watcher = watcher_manager.add_watcher(new_request)
+            if watcher:
+                logger.info(
+                    "[web] Watcher started for %s (%s)", new_id, data["movie_name"]
+                )
+        else:
+            logger.info(
+                "[web] No watcher started for %s (auto_book=%s, movie_url=%s)",
+                new_id, new_request.get("auto_book"), bool(new_request.get("movie_url")),
+            )
+
         return {"success": True, "request": new_request}
     except Exception as exc:
         _add_error(f"Failed to save config: {exc}")
@@ -435,9 +518,65 @@ async def delete_request(request_id: str):
     try:
         save_config(config)
         logger.info("[web] Deleted booking request: %s", request_id)
+
+        # Stop the background watcher if one exists
+        asyncio.create_task(watcher_manager.remove_watcher(request_id))
+
         return {"success": True, "deleted": request_id}
     except Exception as exc:
         _add_error(f"Failed to save config: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# API — Monitor / Watcher management
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/monitors")
+async def api_monitors():
+    """Return status of all active background watchers."""
+    return {
+        "active_count": watcher_manager.watcher_count(),
+        "monitors": watcher_manager.get_all_status(),
+    }
+
+
+@app.post("/api/monitors/stop/{request_id}")
+async def stop_monitor(request_id: str):
+    """Stop the background watcher for a request."""
+    removed = await watcher_manager.remove_watcher(request_id)
+    if removed:
+        logger.info("[web] Stopped watcher for %s", request_id)
+        return {"success": True, "stopped": request_id}
+    return {"success": False, "message": f"No watcher found for {request_id}"}
+
+
+@app.post("/api/monitors/start/{request_id}")
+async def start_monitor(request_id: str):
+    """Start a background watcher for a request."""
+    try:
+        config = load_config()
+        req = next(
+            (r for r in config.get("booking_requests", [])
+             if r.get("id") == request_id),
+            None,
+        )
+        if not req:
+            raise HTTPException(status_code=404, detail=f"Request '{request_id}' not found.")
+        if not req.get("movie_url"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Request '{request_id}' has no movie_url — cannot watch.",
+            )
+
+        watcher = watcher_manager.add_watcher(req)
+        if watcher:
+            return {"success": True, "started": request_id}
+        return {"success": False, "message": f"Could not start watcher for {request_id}"}
+    except HTTPException:
+        raise
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 

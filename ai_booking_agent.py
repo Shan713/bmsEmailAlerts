@@ -28,6 +28,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+# Load environment variables from .env (API keys, etc.)
+from dotenv import load_dotenv
+load_dotenv()
+
 from browser_use import Agent, BrowserProfile
 from browser_use.llm.anthropic.chat import ChatAnthropic
 from browser_use.llm.deepseek.chat import ChatDeepSeek
