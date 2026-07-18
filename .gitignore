@@ -3,3 +3,10 @@
 __pycache__/bms_playwright.cpython-313.pyc
 __pycache__/book_ticket.cpython-313.pyc
 *.pyc
+.ENV
+*.enc
+credentials.enc
+watch.log
+credentials.enc
+/screenshots
+/screenshots
